@@ -195,8 +195,11 @@
       </div>
       <div class="card card-pad">
         <h2>Carregar nova planilha</h2>
-        <p class="sub">Aceita <b>.xlsx</b>, <b>.xls</b> ou <b>.csv</b> com as colunas do relatório de mix (CODCLI, CLIENTE, FANTASIA, COD_VENDEDOR, COD_SUPERVISOR, CODPROD…). A base atual é <b>substituída</b> pela nova.<br>
-        <span class="muted">Dica: o formato .xls antigo limita a 65.536 linhas — prefira .xlsx ou .csv para não perder dados.</span></p>
+        <div class="msg info" style="margin:0 0 14px">
+          <b>Origem da planilha:</b> gere o <b>Relatório 8235</b> no sistema e salve em <b>.csv</b>. Depois carregue o arquivo aqui — a base atual é <b>substituída</b> pela nova.
+        </div>
+        <p class="sub">Também aceita <b>.xlsx</b> e <b>.xls</b> com as colunas do relatório (CODCLI, CLIENTE, FANTASIA, COD_VENDEDOR, COD_SUPERVISOR, CODPROD…).<br>
+        <span class="muted">Evite o .xls antigo: ele corta o relatório em 65.536 linhas. O .csv traz o relatório completo.</span></p>
         <div class="dropzone" id="drop">
           <input type="file" id="file" accept=".xlsx,.xls,.csv" hidden>
           <div><b>Clique para escolher</b> ou arraste o arquivo aqui</div>
