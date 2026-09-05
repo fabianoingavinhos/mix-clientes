@@ -63,7 +63,7 @@ Os logins usam e-mails internos (`login@mix.app`) que não recebem mensagens.
 ## Atualizando a planilha
 Administração → **Planilha do mix** → escolha o novo arquivo → **Substituir base pela planilha**. A base anterior é apagada e substituída.
 
-Formatos aceitos: `.xlsx`, `.xls`, `.csv`. As colunas devem ter os nomes do relatório (`CODCLI`, `CLIENTE`, `FANTASIA`, `CNPJ_CPF`, `CIDADE`, `UF`, `COD_VENDEDOR`, `VENDEDOR`, `COD_SUPERVISOR`, `SUPERVISOR`, `CODPROD`, `DESCRICAO`, …). Colunas faltantes ficam vazias; obrigatórias: `CODCLI`, `CLIENTE`, `COD_VENDEDOR`, `COD_SUPERVISOR`, `CODPROD`, `DESCRICAO`.
+Formatos aceitos: `.xlsx`, `.xls`, `.csv` (com `;` ou `,`, com ou sem linha de cabeçalho — sem cabeçalho assume a ordem padrão das 30 colunas do relatório). Com cabeçalho, as colunas devem ter os nomes do relatório (`CODCLI`, `CLIENTE`, `FANTASIA`, `CNPJ_CPF`, `CIDADE`, `UF`, `COD_VENDEDOR`, `VENDEDOR`, `COD_SUPERVISOR`, `SUPERVISOR`, `CODPROD`, `DESCRICAO`, …). Colunas faltantes ficam vazias; obrigatórias: `CODCLI`, `CLIENTE`, `COD_VENDEDOR`, `COD_SUPERVISOR`, `CODPROD`, `DESCRICAO`.
 
 > ⚠️ O formato **.xls** antigo só guarda 65.536 linhas — o Excel corta o resto silenciosamente. Exporte como **.xlsx** ou **.csv**.
 

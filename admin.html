@@ -243,23 +243,67 @@
     return null;
   }
 
+  // --- Leitura de CSV própria (aceita ; ou , / com ou sem cabeçalho / latin1 ou utf-8)
+  function decodeText(buf) {
+    try { return new TextDecoder("utf-8", { fatal: true }).decode(buf); }
+    catch { return new TextDecoder("windows-1252").decode(buf); }
+  }
+  function parseCsv(text) {
+    const firstLine = text.slice(0, text.indexOf("\n") > 0 ? text.indexOf("\n") : text.length);
+    const delim = (firstLine.split(";").length >= firstLine.split(",").length) ? ";" : (firstLine.split("\t").length > firstLine.split(",").length ? "\t" : ",");
+    const rows = []; let row = [], field = "", inQ = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (inQ) {
+        if (ch === '"') { if (text[i + 1] === '"') { field += '"'; i++; } else inQ = false; }
+        else field += ch;
+      } else if (ch === '"') inQ = true;
+      else if (ch === delim) { row.push(field); field = ""; }
+      else if (ch === "\n" || ch === "\r") {
+        if (ch === "\r" && text[i + 1] === "\n") i++;
+        row.push(field); field = "";
+        if (row.length > 1 || row[0] !== "") rows.push(row);
+        row = [];
+      } else field += ch;
+    }
+    if (field !== "" || row.length) { row.push(field); rows.push(row); }
+    return rows;
+  }
+
+  function readRaw(f, buf) {
+    if (/\.(csv|txt)$/i.test(f.name)) return parseCsv(decodeText(buf));
+    const wb = XLSX.read(buf, { type: "array", cellDates: true, raw: true });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    return XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
+  }
+
   function handleFile(f) {
     parsed = null; el("btnImport").disabled = true;
     showMsg(el("upMsg"), ""); el("upInfo").innerHTML = `<span class="spinner dark"></span> Lendo ${esc(f.name)}…`;
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const wb = XLSX.read(e.target.result, { type: "array", cellDates: true, raw: true, codepage: 65001 });
-        const ws = wb.Sheets[wb.SheetNames[0]];
-        const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
-        if (raw.length < 2) throw new Error("Planilha vazia.");
-        const headers = raw[0].map(normHeader);
-        const idx = {}; headers.forEach((h, i) => { if (COLUMNS.includes(h) && idx[h] == null) idx[h] = i; });
+        const raw = readRaw(f, e.target.result);
+        if (raw.length < 1) throw new Error("Planilha vazia.");
+        // Cabeçalho presente? (primeira célula não numérica e alguma coluna reconhecida)
+        const firstHeaders = (raw[0] || []).map(normHeader);
+        const hasHeader = firstHeaders.some((h) => COLUMNS.includes(h)) && isNaN(parseInt(String(raw[0][0]), 10));
+        const idx = {};
+        let semCabecalho = false;
+        if (hasHeader) {
+          firstHeaders.forEach((h, i) => { if (COLUMNS.includes(h) && idx[h] == null) idx[h] = i; });
+        } else {
+          // Sem cabeçalho: assume a ordem padrão do relatório (30 colunas)
+          const ncols = (raw[0] || []).length;
+          if (ncols < 30) throw new Error(`Arquivo sem cabeçalho com ${ncols} colunas — esperado 30 colunas na ordem padrão do relatório, ou uma linha de cabeçalho.`);
+          COLUMNS.forEach((c, i) => idx[c] = i);
+          semCabecalho = true;
+        }
         const missing = ["codcli", "cliente", "cod_vendedor", "cod_supervisor", "codprod", "descricao"].filter((c) => idx[c] == null);
         if (missing.length) throw new Error("Colunas obrigatórias não encontradas: " + missing.join(", ").toUpperCase());
         const found = Object.keys(idx);
         const rows = [];
-        for (let i = 1; i < raw.length; i++) {
+        for (let i = hasHeader ? 1 : 0; i < raw.length; i++) {
           const r = raw[i]; if (!r || r[idx.codcli] == null || r[idx.codcli] === "") continue;
           const o = {};
           for (const c of found) {
@@ -278,6 +322,7 @@
         const vend = new Set(rows.map((r) => r.cod_vendedor)).size;
         const sup = new Set(rows.map((r) => r.cod_supervisor)).size;
         parsed = { rows, name: f.name };
+        const ex = rows[0];
         el("upInfo").innerHTML = `
           <div class="kpis" style="margin:0">
             <div class="kpi"><div class="l">Linhas</div><div class="v">${fmtInt.format(rows.length)}</div></div>
@@ -285,7 +330,10 @@
             <div class="kpi"><div class="l">Vendedores</div><div class="v">${vend}</div></div>
             <div class="kpi"><div class="l">Supervisores</div><div class="v">${sup}</div></div>
           </div>
-          <div class="muted" style="font-size:13px;margin-top:8px">Colunas reconhecidas: ${found.length}/${COLUMNS.length}${found.length < COLUMNS.length ? " (faltando: " + COLUMNS.filter((c) => !found.includes(c)).join(", ") + ")" : ""}</div>
+          <div class="muted" style="font-size:13px;margin-top:8px">
+            ${semCabecalho ? "Arquivo sem cabeçalho — usada a ordem padrão das 30 colunas. " : ""}Colunas reconhecidas: ${found.length}/${COLUMNS.length}${found.length < COLUMNS.length ? " (faltando: " + COLUMNS.filter((c) => !found.includes(c)).join(", ") + ")" : ""}<br>
+            Conferência da 1ª linha: <b>${esc(ex.cliente)}</b> · vendedor ${esc(ex.vendedor || "")} (${ex.cod_vendedor}) · produto ${esc(ex.descricao)} · última compra ${ex.ultima_compra || "—"} · valor ${ex.valor_total_comprado ?? "—"}
+          </div>
           ${rows.length === 65535 ? `<div class="msg err">Atenção: exatamente 65.535 linhas — o Excel provavelmente cortou o relatório (limite do .xls). Exporte como .xlsx ou .csv.</div>` : ""}`;
         el("btnImport").disabled = false;
       } catch (err) {
