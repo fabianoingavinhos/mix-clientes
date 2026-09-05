@@ -53,10 +53,12 @@
   }
 
   // ---------------- APP ----------------
+  const isVendedor = () => state.profile?.role === "vendedor";
   let state = { profile: null, results: [], selected: null, mix: [], filter: "", status: "", sort: { key: "valor_total_comprado", dir: -1 } };
 
   async function renderApp(ctx) {
     state.profile = ctx.profile;
+    if (isVendedor()) state.sort = { key: "dias_sem_comprar", dir: 1 };
     const p = ctx.profile;
     const scope = p.role === "admin" ? "Todos os clientes da base"
       : p.role === "supervisor" ? `Clientes da sua equipe (supervisor ${p.cod_supervisor ?? "—"})`
@@ -64,8 +66,8 @@
 
     root.innerHTML = Mix.renderTopbar(p, "app") + `
       <div class="wrap">
-        <div class="grid-2">
-          <div>
+        <div class="grid-2" id="grid">
+          <div class="left">
             <div class="card card-pad">
               <h1>Consultar mix</h1>
               <p class="sub">${esc(scope)} · <span id="metaInfo" class="muted"></span></p>
@@ -125,7 +127,7 @@
           <span class="cod">${c.codcli}</span>
           <span>${esc(c.cidade || "")}${c.uf ? "/" + esc(c.uf) : ""}</span>
           <span>${c.produtos} itens</span>
-          <span>${fmtBRL.format(c.valor_total || 0)}</span>
+          ${isVendedor() ? "" : `<span>${fmtBRL.format(c.valor_total || 0)}</span>`}
           ${state.profile.role !== "vendedor" ? `<span>· ${esc(c.vendedor || "")}</span>` : ""}
         </div>
       </button>`).join("") + (state.results.length >= 80 ? `<div class="muted" style="text-align:center;font-size:12px;padding:6px">Mostrando 80 primeiros — refine a busca</div>` : "");
@@ -136,6 +138,8 @@
     state.selected = state.results.find((r) => r.codcli === codcli) || { codcli };
     state.filter = ""; state.status = "";
     renderResults();
+    el("grid").classList.add("has-sel");
+    window.scrollTo({ top: 0 });
     el("detail").innerHTML = `<div class="card card-pad"><div class="empty"><span class="spinner dark"></span></div></div>`;
     const { data, error } = await sb.from("mix").select("*").eq("codcli", codcli).limit(5000);
     if (error) { el("detail").innerHTML = `<div class="card card-pad"><div class="msg err">${esc(error.message)}</div></div>`; return; }
@@ -176,49 +180,59 @@
             </div>
           </div>
           <div class="row">
+            <button class="btn ghost sm mobile-only" id="btnBack">← Voltar</button>
             <button class="btn ghost sm" id="btnExport">⬇ Exportar Excel</button>
           </div>
         </div>
 
         <div class="kpis">
           <div class="kpi"><div class="l">Produtos no mix</div><div class="v">${fmtInt.format(rows.length)}</div><div class="s">${ativos} comprados nos últimos 90 dias</div></div>
+          ${isVendedor() ? "" : `
           <div class="kpi"><div class="l">Valor total comprado</div><div class="v">${fmtBRL.format(total)}</div><div class="s">${fmtInt.format(pedidos)} pedidos</div></div>
-          <div class="kpi"><div class="l">Quantidade total</div><div class="v">${fmtNum.format(qtd)}</div><div class="s">${fornecedores} fornecedores</div></div>
+          <div class="kpi"><div class="l">Quantidade total</div><div class="v">${fmtNum.format(qtd)}</div><div class="s">${fornecedores} fornecedores</div></div>`}
           <div class="kpi"><div class="l">Última compra</div><div class="v">${fmtDate(ultima)}</div><div class="s">${ultima ? diasDesde(ultima) + " dias atrás" : ""}</div></div>
         </div>
 
         <div class="toolbar">
-          <input type="search" id="fMix" placeholder="Filtrar produto ou fornecedor…" value="${esc(state.filter)}">
+          <input type="search" id="fMix" placeholder="${isVendedor() ? "Filtrar produto…" : "Filtrar produto ou fornecedor…"}" value="${esc(state.filter)}">
           <select id="fStatus">
             <option value="">Todos os status</option>
             ${statuses.map((s) => `<option value="${esc(s)}" ${state.status === s ? "selected" : ""}>${esc(s)}</option>`).join("")}
           </select>
+          <select id="fSort" class="mobile-only">
+            ${visibleCols().flatMap((c) => [[c.key, c.num ? -1 : 1, c.label + (c.num ? " ↓" : " A-Z")], [c.key, c.num ? 1 : -1, c.label + (c.num ? " ↑" : " Z-A")]])
+              .map(([k, d, l]) => `<option value="${k}|${d}" ${state.sort.key === k && state.sort.dir === d ? "selected" : ""}>${l}</option>`).join("")}
+          </select>
           <span class="muted" id="countInfo" style="font-size:13px"></span>
         </div>
 
-        <div class="table-wrap" id="tableWrap"></div>
+        <div class="table-wrap cards" id="tableWrap"></div>
       </div>`;
 
     el("fMix").addEventListener("input", (e) => { state.filter = e.target.value; renderTable(); });
     el("fStatus").addEventListener("change", (e) => { state.status = e.target.value; renderTable(); });
     el("btnExport").addEventListener("click", exportExcel);
+    el("btnBack").addEventListener("click", () => { el("grid").classList.remove("has-sel"); state.selected = null; state.mix = []; renderResults(); renderDetail(); });
+    el("fSort").addEventListener("change", (e) => { const [k, d] = e.target.value.split("|"); state.sort = { key: k, dir: +d }; renderTable(); });
     renderTable();
   }
 
-  const COLS = [
-    { key: "codprod", label: "Cód.", num: true },
-    { key: "descricao", label: "Produto" },
-    { key: "fornecedor", label: "Fornecedor" },
-    { key: "ultima_compra", label: "Última compra" },
-    { key: "dias_sem_comprar", label: "Dias s/ comprar", num: true },
-    { key: "status_ultima_compra", label: "Status" },
-    { key: "qtd_pedidos", label: "Pedidos", num: true },
-    { key: "qtd_total_comprada", label: "Qtd total", num: true },
-    { key: "valor_total_comprado", label: "Valor total", num: true },
-    { key: "preco_medio", label: "Preço médio", num: true },
-    { key: "ultimo_preco_pago", label: "Último preço", num: true },
-    { key: "estoque_disponivel_filial_1", label: "Estoque disp.", num: true },
+  // Colunas da tabela. "v: true" = visível também para o perfil vendedor.
+  const ALL_COLS = [
+    { key: "codprod", label: "Cód.", num: true, v: true, cell: (r) => `<td class="num mono">${r.codprod ?? ""}</td>` },
+    { key: "descricao", label: "Produto", v: true, cell: (r) => `<td class="prod"><div class="desc">${esc(r.descricao)}</div><div class="small">${esc(r.embalagem || "")} ${r.unidade ? "· " + esc(r.unidade) : ""}</div></td>` },
+    { key: "fornecedor", label: "Fornecedor", cell: (r) => `<td class="small forn">${esc(r.fornecedor || "")}</td>` },
+    { key: "ultima_compra", label: "Última compra", v: true, cell: (r) => `<td>${fmtDate(r.ultima_compra)}<div class="small">1ª: ${fmtDate(r.primeira_compra_periodo)}</div></td>` },
+    { key: "dias_sem_comprar", label: "Dias s/ comprar", num: true, v: true, cell: (r) => `<td class="num">${r.dias_sem_comprar ?? ""}</td>` },
+    { key: "status_ultima_compra", label: "Status", v: true, cell: (r) => `<td><span class="badge ${statusClass(r.status_ultima_compra, r.dias_sem_comprar)}">${esc(r.status_ultima_compra || "—")}</span></td>` },
+    { key: "qtd_pedidos", label: "Pedidos", num: true, cell: (r) => `<td class="num">${r.qtd_pedidos ?? ""}</td>` },
+    { key: "qtd_total_comprada", label: "Qtd total", num: true, cell: (r) => `<td class="num">${r.qtd_total_comprada != null ? fmtNum.format(r.qtd_total_comprada) : ""}</td>` },
+    { key: "valor_total_comprado", label: "Valor total", num: true, cell: (r) => `<td class="num"><b>${r.valor_total_comprado != null ? fmtBRL.format(r.valor_total_comprado) : ""}</b></td>` },
+    { key: "preco_medio", label: "Preço médio", num: true, cell: (r) => `<td class="num">${r.preco_medio != null ? fmtBRL.format(r.preco_medio) : ""}</td>` },
+    { key: "ultimo_preco_pago", label: "Último preço", num: true, cell: (r) => `<td class="num">${r.ultimo_preco_pago != null ? fmtBRL.format(r.ultimo_preco_pago) : ""}</td>` },
+    { key: "estoque_disponivel_filial_1", label: "Estoque disp.", num: true, cell: (r) => `<td class="num ${(r.estoque_disponivel_filial_1 ?? 1) <= 0 ? "muted" : ""}">${r.estoque_disponivel_filial_1 != null ? fmtInt.format(r.estoque_disponivel_filial_1) : ""}</td>` },
   ];
+  const visibleCols = () => isVendedor() ? ALL_COLS.filter((c) => c.v) : ALL_COLS;
 
   function filteredRows() {
     const f = state.filter.trim().toLowerCase();
@@ -238,30 +252,17 @@
 
   function renderTable() {
     const rows = filteredRows();
+    const COLS = visibleCols();
     el("countInfo").textContent = `${rows.length} de ${state.mix.length} itens`;
     el("tableWrap").innerHTML = `
       <table>
         <thead><tr>${COLS.map((c) => `<th class="${c.num ? "num" : ""}" data-key="${c.key}">${c.label}${state.sort.key === c.key ? `<span class="arrow">${state.sort.dir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}</tr></thead>
-        <tbody>${rows.map((r) => `
-          <tr>
-            <td class="num mono">${r.codprod ?? ""}</td>
-            <td class="prod"><div class="desc">${esc(r.descricao)}</div><div class="small">${esc(r.embalagem || "")} ${r.unidade ? "· " + esc(r.unidade) : ""}</div></td>
-            <td class="small forn">${esc(r.fornecedor || "")}</td>
-            <td>${fmtDate(r.ultima_compra)}<div class="small">1ª: ${fmtDate(r.primeira_compra_periodo)}</div></td>
-            <td class="num">${r.dias_sem_comprar ?? ""}</td>
-            <td><span class="badge ${statusClass(r.status_ultima_compra, r.dias_sem_comprar)}">${esc(r.status_ultima_compra || "—")}</span></td>
-            <td class="num">${r.qtd_pedidos ?? ""}</td>
-            <td class="num">${r.qtd_total_comprada != null ? fmtNum.format(r.qtd_total_comprada) : ""}</td>
-            <td class="num"><b>${r.valor_total_comprado != null ? fmtBRL.format(r.valor_total_comprado) : ""}</b></td>
-            <td class="num">${r.preco_medio != null ? fmtBRL.format(r.preco_medio) : ""}</td>
-            <td class="num">${r.ultimo_preco_pago != null ? fmtBRL.format(r.ultimo_preco_pago) : ""}</td>
-            <td class="num ${(r.estoque_disponivel_filial_1 ?? 1) <= 0 ? "muted" : ""}">${r.estoque_disponivel_filial_1 != null ? fmtInt.format(r.estoque_disponivel_filial_1) : ""}</td>
-          </tr>`).join("")}
+        <tbody>${rows.map((r) => `<tr>${COLS.map((c) => c.cell(r).replace("<td", `<td data-l="${c.label}"`)).join("")}</tr>`).join("")}
         </tbody>
       </table>`;
     el("tableWrap").querySelectorAll("th").forEach((th) => th.addEventListener("click", () => {
       const k = th.dataset.key;
-      state.sort = state.sort.key === k ? { key: k, dir: -state.sort.dir } : { key: k, dir: COLS.find((c) => c.key === k).num ? -1 : 1 };
+      state.sort = state.sort.key === k ? { key: k, dir: -state.sort.dir } : { key: k, dir: ALL_COLS.find((c) => c.key === k).num ? -1 : 1 };
       renderTable();
     }));
   }
@@ -269,13 +270,16 @@
   function exportExcel() {
     const rows = filteredRows();
     const c = state.mix[0] || state.selected;
-    const data = rows.map((r) => ({
+    const data = rows.map((r) => isVendedor() ? {
+      "Cód. Produto": r.codprod, "Produto": r.descricao, "Embalagem": r.embalagem,
+      "Última compra": fmtDate(r.ultima_compra), "Dias sem comprar": r.dias_sem_comprar, "Status": r.status_ultima_compra,
+    } : {
       "Cód. Produto": r.codprod, "Produto": r.descricao, "Embalagem": r.embalagem, "Unidade": r.unidade, "Fornecedor": r.fornecedor,
       "Primeira compra": fmtDate(r.primeira_compra_periodo), "Última compra": fmtDate(r.ultima_compra), "Dias sem comprar": r.dias_sem_comprar,
       "Status": r.status_ultima_compra, "Pedidos": r.qtd_pedidos, "Notas": r.qtd_notas, "Qtd total": r.qtd_total_comprada,
       "Valor total": r.valor_total_comprado, "Preço médio": r.preco_medio, "Último preço": r.ultimo_preco_pago,
       "Estoque disponível": r.estoque_disponivel_filial_1,
-    }));
+    });
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Mix");
