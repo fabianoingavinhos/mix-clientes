@@ -7,6 +7,8 @@
 <link rel="stylesheet" href="style.css">
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script src="config.js"></script>
 <script src="common.js"></script>
 </head>
@@ -54,7 +56,12 @@
 
   // ---------------- APP ----------------
   const isVendedor = () => state.profile?.role === "vendedor";
-  let state = { profile: null, results: [], selected: null, mix: [], filter: "", status: "", sort: { key: "valor_total_comprado", dir: -1 } };
+  let state = { profile: null, results: [], selected: null, mix: [], filter: "", status: "", sort: { key: "valor_total_comprado", dir: -1 }, pedido: {} };
+
+  // Rascunho de pedido por cliente (fica salvo no navegador)
+  const pedidoKey = (codcli) => `mix_pedido_${codcli}`;
+  function loadPedido(codcli) { try { return JSON.parse(localStorage.getItem(pedidoKey(codcli)) || "{}"); } catch { return {}; } }
+  function savePedido() { try { if (state.selected) localStorage.setItem(pedidoKey(state.selected.codcli), JSON.stringify(state.pedido)); } catch {} }
 
   async function renderApp(ctx) {
     state.profile = ctx.profile;
@@ -144,6 +151,7 @@
     const { data, error } = await sb.from("mix").select("*").eq("codcli", codcli).limit(5000);
     if (error) { el("detail").innerHTML = `<div class="card card-pad"><div class="msg err">${esc(error.message)}</div></div>`; return; }
     state.mix = data || [];
+    state.pedido = loadPedido(codcli);
     renderDetail();
   }
 
@@ -207,11 +215,38 @@
         </div>
 
         <div class="table-wrap cards" id="tableWrap"></div>
+
+        <div class="pedido-bar" id="pedidoBar">
+          <div class="pb-info">📝 <b>Sugestão de pedido:</b> <span id="pbItens">0</span> itens · <span id="pbUnid">0</span> unidades</div>
+          <div class="pb-actions">
+            <button class="btn sm" id="pbExcel">Excel</button>
+            <button class="btn sm" id="pbPdf">PDF</button>
+            <button class="btn ghost sm" id="pbLimpar">Limpar</button>
+          </div>
+        </div>
       </div>`;
 
     el("fMix").addEventListener("input", (e) => { state.filter = e.target.value; renderTable(); });
     el("fStatus").addEventListener("change", (e) => { state.status = e.target.value; renderTable(); });
     el("btnExport").addEventListener("click", exportExcel);
+    el("tableWrap").addEventListener("input", (e) => {
+      if (!e.target.classList.contains("qtd")) return;
+      const cod = e.target.dataset.cod, v = parseInt(e.target.value, 10);
+      if (v > 0) state.pedido[cod] = v; else delete state.pedido[cod];
+      e.target.closest("tr")?.classList.toggle("has-qtd", v > 0);
+      savePedido(); updatePedidoBar();
+    });
+    el("tableWrap").addEventListener("keydown", (e) => {
+      if (e.target.classList.contains("qtd") && e.key === "Enter") { // Enter pula para a próxima quantidade
+        e.preventDefault();
+        const all = [...el("tableWrap").querySelectorAll("input.qtd")]; const i = all.indexOf(e.target);
+        if (all[i + 1]) { all[i + 1].focus(); all[i + 1].select(); }
+      }
+    });
+    el("pbExcel").addEventListener("click", exportPedidoExcel);
+    el("pbPdf").addEventListener("click", exportPedidoPdf);
+    el("pbLimpar").addEventListener("click", () => { state.pedido = {}; savePedido(); renderTable(); updatePedidoBar(); });
+    updatePedidoBar();
     el("btnBack").addEventListener("click", () => { el("grid").classList.remove("has-sel"); state.selected = null; state.mix = []; renderResults(); renderDetail(); });
     el("fSort").addEventListener("change", (e) => { const [k, d] = e.target.value.split("|"); state.sort = { key: k, dir: +d }; renderTable(); });
     renderTable();
@@ -221,6 +256,7 @@
   const ALL_COLS = [
     { key: "codprod", label: "Cód.", num: true, v: true, cell: (r) => `<td class="num mono">${r.codprod ?? ""}</td>` },
     { key: "descricao", label: "Produto", v: true, cell: (r) => `<td class="prod"><div class="desc">${esc(r.descricao)}</div><div class="small">${esc(r.embalagem || "")} ${r.unidade ? "· " + esc(r.unidade) : ""}</div></td>` },
+    { key: "pedido", label: "Qtd sugerida", num: true, v: true, cell: (r) => `<td class="num qtd-cell"><input type="number" min="0" step="1" inputmode="numeric" class="qtd" data-cod="${r.codprod}" value="${state.pedido[r.codprod] ?? ""}" placeholder="0" aria-label="Quantidade sugerida"></td>` },
     { key: "fornecedor", label: "Fornecedor", cell: (r) => `<td class="small forn">${esc(r.fornecedor || "")}</td>` },
     { key: "ultima_compra", label: "Última compra", v: true, cell: (r) => `<td>${fmtDate(r.ultima_compra)}<div class="small">1ª: ${fmtDate(r.primeira_compra_periodo)}</div></td>` },
     { key: "dias_sem_comprar", label: "Dias s/ comprar", num: true, v: true, cell: (r) => `<td class="num">${r.dias_sem_comprar ?? ""}</td>` },
@@ -241,7 +277,7 @@
       (!state.status || r.status_ultima_compra === state.status));
     const { key, dir } = state.sort;
     rows.sort((a, b) => {
-      const va = a[key], vb = b[key];
+      const va = key === "pedido" ? (state.pedido[a.codprod] ?? null) : a[key], vb = key === "pedido" ? (state.pedido[b.codprod] ?? null) : b[key];
       if (va == null && vb == null) return 0;
       if (va == null) return 1; if (vb == null) return -1;
       if (typeof va === "number" || !isNaN(+va) && !isNaN(+vb) && va !== "" && vb !== "") return (+va - +vb) * dir;
@@ -257,7 +293,7 @@
     el("tableWrap").innerHTML = `
       <table>
         <thead><tr>${COLS.map((c) => `<th class="${c.num ? "num" : ""}" data-key="${c.key}">${c.label}${state.sort.key === c.key ? `<span class="arrow">${state.sort.dir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}</tr></thead>
-        <tbody>${rows.map((r) => `<tr>${COLS.map((c) => c.cell(r).replace("<td", `<td data-l="${c.label}"`)).join("")}</tr>`).join("")}
+        <tbody>${rows.map((r) => `<tr class="${state.pedido[r.codprod] > 0 ? "has-qtd" : ""}">${COLS.map((c) => c.cell(r).replace("<td", `<td data-l="${c.label}"`)).join("")}</tr>`).join("")}
         </tbody>
       </table>`;
     el("tableWrap").querySelectorAll("th").forEach((th) => th.addEventListener("click", () => {
@@ -284,6 +320,90 @@
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Mix");
     XLSX.writeFile(wb, `mix_${c.codcli}_${(c.fantasia || c.cliente || "cliente").replace(/[^\w]+/g, "_").slice(0, 40)}.xlsx`);
+  }
+
+  // ---------- Sugestão de pedido ----------
+  function pedidoRows() {
+    return state.mix.filter((r) => state.pedido[r.codprod] > 0)
+      .map((r) => ({ ...r, qtd: state.pedido[r.codprod] }))
+      .sort((a, b) => String(a.descricao).localeCompare(String(b.descricao), "pt-BR"));
+  }
+  function updatePedidoBar() {
+    const rows = pedidoRows();
+    const bar = el("pedidoBar"); if (!bar) return;
+    el("pbItens").textContent = rows.length;
+    el("pbUnid").textContent = fmtInt.format(rows.reduce((s, r) => s + r.qtd, 0));
+    bar.classList.toggle("active", rows.length > 0);
+    el("pbExcel").disabled = el("pbPdf").disabled = el("pbLimpar").disabled = rows.length === 0;
+  }
+  function pedidoMeta() {
+    const c = state.mix[0] || state.selected;
+    const hoje = new Date().toLocaleDateString("pt-BR");
+    return { c, hoje, nomeArq: `pedido_${c.codcli}_${(c.fantasia || c.cliente || "cliente").replace(/[^\w]+/g, "_").slice(0, 40)}_${hoje.replace(/\//g, "-")}` };
+  }
+  function exportPedidoExcel() {
+    const rows = pedidoRows(); if (!rows.length) return;
+    const { c, hoje, nomeArq } = pedidoMeta();
+    const head = [
+      ["SUGESTÃO DE PEDIDO"],
+      ["Cliente", `${c.codcli} - ${c.cliente}`], ["Fantasia", c.fantasia || ""], ["CNPJ/CPF", c.cnpj_cpf || ""],
+      ["Cidade", `${c.cidade || ""}${c.uf ? "/" + c.uf : ""}`], ["Vendedor", `${c.cod_vendedor ?? ""} - ${c.vendedor || ""}`], ["Data", hoje], [],
+      ["Cód. Produto", "Produto", "Embalagem", "Última compra", "Dias s/ comprar", "Status", "Qtd sugerida"],
+    ];
+    const body = rows.map((r) => [r.codprod, r.descricao, r.embalagem || "", fmtDate(r.ultima_compra), r.dias_sem_comprar ?? "", r.status_ultima_compra || "", r.qtd]);
+    body.push([], ["", "", "", "", "", "TOTAL", rows.reduce((s, r) => s + r.qtd, 0)]);
+    const ws = XLSX.utils.aoa_to_sheet([...head, ...body]);
+    ws["!cols"] = [{ wch: 12 }, { wch: 45 }, { wch: 12 }, { wch: 14 }, { wch: 15 }, { wch: 20 }, { wch: 13 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Pedido");
+    XLSX.writeFile(wb, nomeArq + ".xlsx");
+  }
+  function exportPedidoPdf() {
+    const rows = pedidoRows(); if (!rows.length) return;
+    const { c, hoje, nomeArq } = pedidoMeta();
+    const total = rows.reduce((s, r) => s + r.qtd, 0);
+    const jsPDF = window.jspdf?.jsPDF;
+    if (!jsPDF || !jsPDF.API?.autoTable) return exportPedidoPrint(rows, c, hoje, total);
+    const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    doc.setFontSize(16); doc.setTextColor(122, 31, 43); doc.text("Sugestão de pedido", 14, 16);
+    doc.setFontSize(10); doc.setTextColor(40);
+    const info = [
+      `Cliente: ${c.codcli} - ${c.cliente}`, c.fantasia ? `Fantasia: ${c.fantasia}` : null,
+      `CNPJ/CPF: ${c.cnpj_cpf || "—"}   Cidade: ${c.cidade || ""}${c.uf ? "/" + c.uf : ""}`,
+      `Vendedor: ${c.cod_vendedor ?? ""} - ${c.vendedor || ""}   Data: ${hoje}`,
+    ].filter(Boolean);
+    info.forEach((t, i) => doc.text(t, 14, 24 + i * 5.5));
+    doc.autoTable({
+      startY: 24 + info.length * 5.5 + 3,
+      head: [["Cód.", "Produto", "Emb.", "Última compra", "Dias s/c", "Status", "Qtd"]],
+      body: rows.map((r) => [r.codprod, r.descricao, r.embalagem || "", fmtDate(r.ultima_compra), r.dias_sem_comprar ?? "", r.status_ultima_compra || "", r.qtd]),
+      foot: [["", "", "", "", "", "TOTAL", total]],
+      styles: { fontSize: 8.5, cellPadding: 2 },
+      headStyles: { fillColor: [122, 31, 43] },
+      footStyles: { fillColor: [240, 240, 240], textColor: 20, fontStyle: "bold" },
+      columnStyles: { 0: { cellWidth: 14 }, 1: { cellWidth: 70 }, 2: { cellWidth: 18 }, 3: { cellWidth: 24 }, 4: { cellWidth: 16, halign: "right" }, 5: { cellWidth: 30 }, 6: { cellWidth: 14, halign: "right", fontStyle: "bold" } },
+      didDrawPage: () => {
+        doc.setFontSize(8); doc.setTextColor(120);
+        doc.text(`${cfg.EMPRESA || "Mix Clientes"} · gerado em ${new Date().toLocaleString("pt-BR")} · página ${doc.internal.getNumberOfPages()}`, 14, doc.internal.pageSize.getHeight() - 8);
+      },
+    });
+    doc.save(nomeArq + ".pdf");
+  }
+  // Plano B: janela de impressão (Salvar como PDF) caso a biblioteca não carregue
+  function exportPedidoPrint(rows, c, hoje, total) {
+    const w = window.open("", "_blank");
+    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Sugestão de pedido</title>
+      <style>body{font-family:Arial,sans-serif;padding:24px;color:#222}h1{color:#7a1f2b;font-size:20px;margin:0 0 8px}p{margin:2px 0;font-size:13px}
+      table{border-collapse:collapse;width:100%;margin-top:14px;font-size:12px}th,td{border:1px solid #ccc;padding:5px 7px;text-align:left}th{background:#7a1f2b;color:#fff}td.n,th.n{text-align:right}tfoot td{font-weight:bold;background:#f2f2f2}</style></head><body>
+      <h1>Sugestão de pedido</h1>
+      <p><b>Cliente:</b> ${esc(c.codcli)} - ${esc(c.cliente)}</p>${c.fantasia ? `<p><b>Fantasia:</b> ${esc(c.fantasia)}</p>` : ""}
+      <p><b>CNPJ/CPF:</b> ${esc(c.cnpj_cpf || "—")} &nbsp; <b>Cidade:</b> ${esc(c.cidade || "")}${c.uf ? "/" + esc(c.uf) : ""}</p>
+      <p><b>Vendedor:</b> ${esc(c.cod_vendedor ?? "")} - ${esc(c.vendedor || "")} &nbsp; <b>Data:</b> ${hoje}</p>
+      <table><thead><tr><th>Cód.</th><th>Produto</th><th>Emb.</th><th>Última compra</th><th class="n">Dias s/c</th><th>Status</th><th class="n">Qtd</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr><td>${r.codprod}</td><td>${esc(r.descricao)}</td><td>${esc(r.embalagem || "")}</td><td>${fmtDate(r.ultima_compra)}</td><td class="n">${r.dias_sem_comprar ?? ""}</td><td>${esc(r.status_ultima_compra || "")}</td><td class="n"><b>${r.qtd}</b></td></tr>`).join("")}</tbody>
+      <tfoot><tr><td colspan="6">TOTAL</td><td class="n">${total}</td></tr></tfoot></table>
+      <scr`+`ipt>window.onload=()=>window.print()</scr`+`ipt></body></html>`);
+    w.document.close();
   }
 
   function diasDesde(iso) {
