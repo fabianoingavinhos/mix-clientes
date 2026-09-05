@@ -88,6 +88,9 @@ create index if not exists mix_cod_vendedor_idx  on public.mix (cod_vendedor);
 create index if not exists mix_cod_supervisor_idx on public.mix (cod_supervisor);
 create index if not exists mix_cliente_idx       on public.mix (lower(cliente));
 create index if not exists mix_fantasia_idx      on public.mix (lower(fantasia));
+create extension if not exists pg_trgm with schema extensions;
+create index if not exists mix_cliente_trgm  on public.mix using gin (cliente  extensions.gin_trgm_ops);
+create index if not exists mix_fantasia_trgm on public.mix using gin (fantasia extensions.gin_trgm_ops);
 
 alter table public.mix enable row level security;
 
@@ -95,19 +98,15 @@ alter table public.mix enable row level security;
 --   admin       -> tudo
 --   supervisor  -> linhas do seu cod_supervisor
 --   vendedor    -> linhas do seu cod_vendedor
+-- Os subselects entre parênteses são avaliados UMA vez por consulta (InitPlan),
+-- permitindo ao Postgres usar os índices de cod_vendedor / cod_supervisor.
 drop policy if exists mix_select on public.mix;
 create policy mix_select on public.mix
   for select to authenticated
   using (
-    exists (
-      select 1 from public.profiles p
-      where p.id = auth.uid()
-        and (
-          p.role = 'admin'
-          or (p.role = 'supervisor' and p.cod_supervisor = mix.cod_supervisor)
-          or (p.role = 'vendedor'   and p.cod_vendedor   = mix.cod_vendedor)
-        )
-    )
+    (select p.role from public.profiles p where p.id = auth.uid()) = 'admin'
+    or mix.cod_supervisor = (select p.cod_supervisor from public.profiles p where p.id = auth.uid() and p.role = 'supervisor')
+    or mix.cod_vendedor   = (select p.cod_vendedor   from public.profiles p where p.id = auth.uid() and p.role = 'vendedor')
   );
 
 drop policy if exists mix_insert_admin on public.mix;
