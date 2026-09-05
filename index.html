@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mix Clientes — Consulta</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="config.js"></script>
+<script src="common.js"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+(async () => {
+  const { sb, configured, cfg, fmtBRL, fmtNum, fmtInt, fmtDate, statusClass, esc, el, showMsg } = Mix;
+  const root = el("root");
+
+  if (!configured) {
+    root.innerHTML = `<div class="wrap"><div class="card card-pad"><h1>Configuração pendente</h1>
+      <p class="sub">Edite o arquivo <span class="mono">config.js</span> e preencha SUPABASE_URL e SUPABASE_ANON_KEY com os dados do seu projeto Supabase. Depois execute <span class="mono">schema.sql</span> no SQL Editor.</p></div></div>`;
+    return;
+  }
+
+  // ---------------- LOGIN ----------------
+  function renderLogin() {
+    root.innerHTML = `
+      <div class="login-wrap">
+        <form class="card login-card" id="loginForm" autocomplete="on">
+          <div class="brand"><div class="mark">M</div><div><b>${esc(cfg.EMPRESA || "Mix Clientes")}</b><small>Consulta de mix por cliente</small></div></div>
+          <div class="field"><label>Usuário</label><input type="text" id="lUser" autocomplete="username" autofocus required></div>
+          <div class="field"><label>Senha</label><input type="password" id="lPass" autocomplete="current-password" required></div>
+          <div id="lMsg"></div>
+          <button class="btn block" id="lBtn" type="submit">Entrar</button>
+        </form>
+      </div>`;
+    el("loginForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const btn = el("lBtn"); btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Entrando…';
+      showMsg(el("lMsg"), "");
+      try {
+        await Mix.login(el("lUser").value, el("lPass").value);
+        const ctx = await Mix.getSessionProfile();
+        if (!ctx) throw new Error("Usuário sem perfil cadastrado. Fale com o administrador.");
+        renderApp(ctx);
+      } catch (err) {
+        showMsg(el("lMsg"), err.message, "err");
+        btn.disabled = false; btn.textContent = "Entrar";
+      }
+    });
+  }
+
+  // ---------------- APP ----------------
+  let state = { profile: null, results: [], selected: null, mix: [], filter: "", status: "", sort: { key: "valor_total_comprado", dir: -1 } };
+
+  async function renderApp(ctx) {
+    state.profile = ctx.profile;
+    const p = ctx.profile;
+    const scope = p.role === "admin" ? "Todos os clientes da base"
+      : p.role === "supervisor" ? `Clientes da sua equipe (supervisor ${p.cod_supervisor ?? "—"})`
+      : `Seus clientes (vendedor ${p.cod_vendedor ?? "—"})`;
+
+    root.innerHTML = Mix.renderTopbar(p, "app") + `
+      <div class="wrap">
+        <div class="grid-2">
+          <div>
+            <div class="card card-pad">
+              <h1>Consultar mix</h1>
+              <p class="sub">${esc(scope)} · <span id="metaInfo" class="muted"></span></p>
+              <div class="searchbox">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                <input type="search" id="q" placeholder="Código, nome, fantasia ou CNPJ…" autocomplete="off" autofocus>
+              </div>
+              <div id="results" class="results"></div>
+            </div>
+          </div>
+          <div id="detail"></div>
+        </div>
+      </div>`;
+    Mix.bindTopbar();
+    renderDetail();
+    loadMeta();
+
+    const q = el("q");
+    let t;
+    q.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => search(q.value), 250); });
+    q.addEventListener("keydown", (e) => { if (e.key === "Enter") { clearTimeout(t); search(q.value); } });
+    search("");
+  }
+
+  async function loadMeta() {
+    const { data } = await sb.from("mix_meta").select("*").eq("id", 1).maybeSingle();
+    if (data?.atualizado_em) {
+      const d = new Date(data.atualizado_em);
+      el("metaInfo").textContent = `base atualizada em ${d.toLocaleDateString("pt-BR")} ${d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
+    } else el("metaInfo").textContent = "nenhuma planilha carregada ainda";
+  }
+
+  let lastQuery = null;
+  async function search(q) {
+    q = q.trim();
+    lastQuery = q;
+    const box = el("results");
+    box.innerHTML = `<div class="empty"><span class="spinner dark"></span></div>`;
+    const { data, error } = await sb.rpc("buscar_clientes", { q, limite: 80 });
+    if (lastQuery !== q) return; // resposta antiga
+    if (error) { box.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+    state.results = data || [];
+    renderResults();
+  }
+
+  function renderResults() {
+    const box = el("results");
+    if (!state.results.length) {
+      box.innerHTML = `<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><div>Nenhum cliente encontrado</div></div>`;
+      return;
+    }
+    box.innerHTML = state.results.map((c) => `
+      <button class="result ${state.selected?.codcli === c.codcli ? "active" : ""}" data-cod="${c.codcli}">
+        <div class="name">${esc(c.cliente)}</div>
+        ${c.fantasia ? `<div class="fant">${esc(c.fantasia)}</div>` : ""}
+        <div class="meta">
+          <span class="cod">${c.codcli}</span>
+          <span>${esc(c.cidade || "")}${c.uf ? "/" + esc(c.uf) : ""}</span>
+          <span>${c.produtos} itens</span>
+          <span>${fmtBRL.format(c.valor_total || 0)}</span>
+          ${state.profile.role !== "vendedor" ? `<span>· ${esc(c.vendedor || "")}</span>` : ""}
+        </div>
+      </button>`).join("") + (state.results.length >= 80 ? `<div class="muted" style="text-align:center;font-size:12px;padding:6px">Mostrando 80 primeiros — refine a busca</div>` : "");
+    box.querySelectorAll(".result").forEach((b) => b.addEventListener("click", () => selectClient(+b.dataset.cod)));
+  }
+
+  async function selectClient(codcli) {
+    state.selected = state.results.find((r) => r.codcli === codcli) || { codcli };
+    state.filter = ""; state.status = "";
+    renderResults();
+    el("detail").innerHTML = `<div class="card card-pad"><div class="empty"><span class="spinner dark"></span></div></div>`;
+    const { data, error } = await sb.from("mix").select("*").eq("codcli", codcli).limit(5000);
+    if (error) { el("detail").innerHTML = `<div class="card card-pad"><div class="msg err">${esc(error.message)}</div></div>`; return; }
+    state.mix = data || [];
+    renderDetail();
+  }
+
+  function renderDetail() {
+    const d = el("detail");
+    if (!state.selected) {
+      d.innerHTML = `<div class="card card-pad"><div class="empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 6h16M4 12h16M4 18h10"/></svg>
+        <div>Busque e selecione um cliente para ver o mix de produtos.</div></div></div>`;
+      return;
+    }
+    const rows = state.mix;
+    const c = rows[0] || state.selected;
+    const total = rows.reduce((s, r) => s + (+r.valor_total_comprado || 0), 0);
+    const qtd = rows.reduce((s, r) => s + (+r.qtd_total_comprada || 0), 0);
+    const pedidos = rows.reduce((s, r) => s + (+r.qtd_pedidos || 0), 0);
+    const ultima = rows.reduce((m, r) => (r.ultima_compra && (!m || r.ultima_compra > m) ? r.ultima_compra : m), null);
+    const ativos = rows.filter((r) => (r.dias_sem_comprar ?? 9999) <= 90).length;
+    const fornecedores = new Set(rows.map((r) => r.fornecedor)).size;
+    const statuses = [...new Set(rows.map((r) => r.status_ultima_compra).filter(Boolean))].sort((a, b) => ordStatus(a) - ordStatus(b));
+
+    d.innerHTML = `
+      <div class="card card-pad">
+        <div class="client-head">
+          <div>
+            <h2>${esc(c.cliente)}</h2>
+            ${c.fantasia ? `<div class="fant">${esc(c.fantasia)}</div>` : ""}
+            <div class="meta">
+              <span class="mono">Cód. ${c.codcli}</span>
+              ${c.cnpj_cpf ? `<span>${esc(c.cnpj_cpf)}</span>` : ""}
+              <span>${esc(c.cidade || "")}${c.uf ? "/" + esc(c.uf) : ""}</span>
+              <span>Vendedor: <b>${esc(c.vendedor || "—")}</b></span>
+              <span>Supervisor: <b>${esc(c.supervisor || "—")}</b></span>
+            </div>
+          </div>
+          <div class="row">
+            <button class="btn ghost sm" id="btnExport">⬇ Exportar Excel</button>
+          </div>
+        </div>
+
+        <div class="kpis">
+          <div class="kpi"><div class="l">Produtos no mix</div><div class="v">${fmtInt.format(rows.length)}</div><div class="s">${ativos} comprados nos últimos 90 dias</div></div>
+          <div class="kpi"><div class="l">Valor total comprado</div><div class="v">${fmtBRL.format(total)}</div><div class="s">${fmtInt.format(pedidos)} pedidos</div></div>
+          <div class="kpi"><div class="l">Quantidade total</div><div class="v">${fmtNum.format(qtd)}</div><div class="s">${fornecedores} fornecedores</div></div>
+          <div class="kpi"><div class="l">Última compra</div><div class="v">${fmtDate(ultima)}</div><div class="s">${ultima ? diasDesde(ultima) + " dias atrás" : ""}</div></div>
+        </div>
+
+        <div class="toolbar">
+          <input type="search" id="fMix" placeholder="Filtrar produto ou fornecedor…" value="${esc(state.filter)}">
+          <select id="fStatus">
+            <option value="">Todos os status</option>
+            ${statuses.map((s) => `<option value="${esc(s)}" ${state.status === s ? "selected" : ""}>${esc(s)}</option>`).join("")}
+          </select>
+          <span class="muted" id="countInfo" style="font-size:13px"></span>
+        </div>
+
+        <div class="table-wrap" id="tableWrap"></div>
+      </div>`;
+
+    el("fMix").addEventListener("input", (e) => { state.filter = e.target.value; renderTable(); });
+    el("fStatus").addEventListener("change", (e) => { state.status = e.target.value; renderTable(); });
+    el("btnExport").addEventListener("click", exportExcel);
+    renderTable();
+  }
+
+  const COLS = [
+    { key: "codprod", label: "Cód.", num: true },
+    { key: "descricao", label: "Produto" },
+    { key: "fornecedor", label: "Fornecedor" },
+    { key: "ultima_compra", label: "Última compra" },
+    { key: "dias_sem_comprar", label: "Dias s/ comprar", num: true },
+    { key: "status_ultima_compra", label: "Status" },
+    { key: "qtd_pedidos", label: "Pedidos", num: true },
+    { key: "qtd_total_comprada", label: "Qtd total", num: true },
+    { key: "valor_total_comprado", label: "Valor total", num: true },
+    { key: "preco_medio", label: "Preço médio", num: true },
+    { key: "ultimo_preco_pago", label: "Último preço", num: true },
+    { key: "estoque_disponivel_filial_1", label: "Estoque disp.", num: true },
+  ];
+
+  function filteredRows() {
+    const f = state.filter.trim().toLowerCase();
+    let rows = state.mix.filter((r) =>
+      (!f || (r.descricao || "").toLowerCase().includes(f) || (r.fornecedor || "").toLowerCase().includes(f) || String(r.codprod).includes(f)) &&
+      (!state.status || r.status_ultima_compra === state.status));
+    const { key, dir } = state.sort;
+    rows.sort((a, b) => {
+      const va = a[key], vb = b[key];
+      if (va == null && vb == null) return 0;
+      if (va == null) return 1; if (vb == null) return -1;
+      if (typeof va === "number" || !isNaN(+va) && !isNaN(+vb) && va !== "" && vb !== "") return (+va - +vb) * dir;
+      return String(va).localeCompare(String(vb), "pt-BR") * dir;
+    });
+    return rows;
+  }
+
+  function renderTable() {
+    const rows = filteredRows();
+    el("countInfo").textContent = `${rows.length} de ${state.mix.length} itens`;
+    el("tableWrap").innerHTML = `
+      <table>
+        <thead><tr>${COLS.map((c) => `<th class="${c.num ? "num" : ""}" data-key="${c.key}">${c.label}${state.sort.key === c.key ? `<span class="arrow">${state.sort.dir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}</tr></thead>
+        <tbody>${rows.map((r) => `
+          <tr>
+            <td class="num mono">${r.codprod ?? ""}</td>
+            <td class="prod"><div class="desc">${esc(r.descricao)}</div><div class="small">${esc(r.embalagem || "")} ${r.unidade ? "· " + esc(r.unidade) : ""}</div></td>
+            <td class="small forn">${esc(r.fornecedor || "")}</td>
+            <td>${fmtDate(r.ultima_compra)}<div class="small">1ª: ${fmtDate(r.primeira_compra_periodo)}</div></td>
+            <td class="num">${r.dias_sem_comprar ?? ""}</td>
+            <td><span class="badge ${statusClass(r.status_ultima_compra, r.dias_sem_comprar)}">${esc(r.status_ultima_compra || "—")}</span></td>
+            <td class="num">${r.qtd_pedidos ?? ""}</td>
+            <td class="num">${r.qtd_total_comprada != null ? fmtNum.format(r.qtd_total_comprada) : ""}</td>
+            <td class="num"><b>${r.valor_total_comprado != null ? fmtBRL.format(r.valor_total_comprado) : ""}</b></td>
+            <td class="num">${r.preco_medio != null ? fmtBRL.format(r.preco_medio) : ""}</td>
+            <td class="num">${r.ultimo_preco_pago != null ? fmtBRL.format(r.ultimo_preco_pago) : ""}</td>
+            <td class="num ${(r.estoque_disponivel_filial_1 ?? 1) <= 0 ? "muted" : ""}">${r.estoque_disponivel_filial_1 != null ? fmtInt.format(r.estoque_disponivel_filial_1) : ""}</td>
+          </tr>`).join("")}
+        </tbody>
+      </table>`;
+    el("tableWrap").querySelectorAll("th").forEach((th) => th.addEventListener("click", () => {
+      const k = th.dataset.key;
+      state.sort = state.sort.key === k ? { key: k, dir: -state.sort.dir } : { key: k, dir: COLS.find((c) => c.key === k).num ? -1 : 1 };
+      renderTable();
+    }));
+  }
+
+  function exportExcel() {
+    const rows = filteredRows();
+    const c = state.mix[0] || state.selected;
+    const data = rows.map((r) => ({
+      "Cód. Produto": r.codprod, "Produto": r.descricao, "Embalagem": r.embalagem, "Unidade": r.unidade, "Fornecedor": r.fornecedor,
+      "Primeira compra": fmtDate(r.primeira_compra_periodo), "Última compra": fmtDate(r.ultima_compra), "Dias sem comprar": r.dias_sem_comprar,
+      "Status": r.status_ultima_compra, "Pedidos": r.qtd_pedidos, "Notas": r.qtd_notas, "Qtd total": r.qtd_total_comprada,
+      "Valor total": r.valor_total_comprado, "Preço médio": r.preco_medio, "Último preço": r.ultimo_preco_pago,
+      "Estoque disponível": r.estoque_disponivel_filial_1,
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Mix");
+    XLSX.writeFile(wb, `mix_${c.codcli}_${(c.fantasia || c.cliente || "cliente").replace(/[^\w]+/g, "_").slice(0, 40)}.xlsx`);
+  }
+
+  function diasDesde(iso) {
+    const d = new Date(iso + "T00:00:00");
+    return Math.max(0, Math.round((Date.now() - d.getTime()) / 86400000));
+  }
+  function ordStatus(s) {
+    const order = ["COMPROU ATE 30", "31 A 60", "61 A 90", "91 A 180", "181 A 365", "1 A 2", "2 A 3", "3 A 4", "4 A 5"];
+    const i = order.findIndex((o) => s.toUpperCase().startsWith(o));
+    return i < 0 ? 99 : i;
+  }
+
+  // ---------------- BOOT ----------------
+  const ctx = await Mix.getSessionProfile();
+  if (ctx) renderApp(ctx); else renderLogin();
+  sb.auth.onAuthStateChange((ev) => { if (ev === "SIGNED_OUT") renderLogin(); });
+})();
+</script>
+</body>
+</html>

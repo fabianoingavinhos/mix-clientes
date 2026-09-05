@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mix Clientes — Administração</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="config.js"></script>
+<script src="common.js"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+(async () => {
+  const { sb, esc, el, showMsg, fmtInt, ROLE_LABEL, openModal, closeModal, toast } = Mix;
+  const ctx = await Mix.requireAuth({ adminOnly: true });
+  const root = el("root");
+
+  root.innerHTML = Mix.renderTopbar(ctx.profile, "admin") + `
+    <div class="wrap">
+      <h1>Administração</h1>
+      <p class="sub">Gerencie usuários, permissões e a base de dados do mix.</p>
+      <div class="tabs">
+        <button class="active" data-tab="users">Usuários</button>
+        <button data-tab="upload">Planilha do mix</button>
+        <button data-tab="equipe">Equipe na base</button>
+      </div>
+      <div id="tab-users"></div>
+      <div id="tab-upload" hidden></div>
+      <div id="tab-equipe" hidden></div>
+    </div>`;
+  Mix.bindTopbar();
+
+  document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
+    document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
+    ["users", "upload", "equipe"].forEach((t) => el("tab-" + t).hidden = t !== b.dataset.tab);
+    if (b.dataset.tab === "equipe") loadEquipe();
+  }));
+
+  // =====================================================================
+  //  USUÁRIOS
+  // =====================================================================
+  let users = [];
+  async function loadUsers() {
+    const { data, error } = await sb.from("profiles").select("*").order("role").order("nome");
+    if (error) return toast(error.message, "err");
+    users = data;
+    renderUsers();
+  }
+
+  function renderUsers() {
+    el("tab-users").innerHTML = `
+      <div class="card card-pad" style="margin-bottom:16px">
+        <h2>Novo usuário</h2>
+        <form id="newUser">
+          <div class="form-grid">
+            <div class="field"><label>Login *</label><input type="text" id="uLogin" required placeholder="ex: eduardo"></div>
+            <div class="field"><label>Nome *</label><input type="text" id="uNome" required></div>
+            <div class="field"><label>Senha *</label><input type="text" id="uSenha" required placeholder="mín. 4 caracteres"></div>
+            <div class="field"><label>Perfil *</label>
+              <select id="uRole"><option value="vendedor">Vendedor</option><option value="supervisor">Supervisor</option><option value="admin">Administrador</option></select></div>
+            <div class="field"><label>Cód. vendedor</label><input type="number" id="uVend" placeholder="da planilha"></div>
+            <div class="field"><label>Cód. supervisor</label><input type="number" id="uSup" placeholder="da planilha"></div>
+          </div>
+          <div id="uMsg"></div>
+          <button class="btn" type="submit">Criar usuário</button>
+          <span class="muted" style="font-size:13px;margin-left:10px">Vendedor precisa do <b>cód. vendedor</b>; supervisor precisa do <b>cód. supervisor</b> (veja a aba "Equipe na base").</span>
+        </form>
+      </div>
+
+      <div class="card card-pad">
+        <div class="row" style="justify-content:space-between;margin-bottom:10px">
+          <h2 style="margin:0">Usuários cadastrados <span class="badge gray">${users.length}</span></h2>
+          <input type="search" id="uFilter" placeholder="Filtrar…" style="max-width:240px">
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Nome</th><th>Login</th><th>Perfil</th><th class="num">Cód. vend.</th><th class="num">Cód. sup.</th><th>Ações</th></tr></thead>
+          <tbody id="uBody"></tbody>
+        </table></div>
+      </div>`;
+
+    el("newUser").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const role = el("uRole").value;
+      const payload = {
+        p_login: el("uLogin").value.trim().toLowerCase().replace(/\s+/g, ""),
+        p_senha: el("uSenha").value, p_nome: el("uNome").value.trim(), p_role: role,
+        p_cod_vendedor: el("uVend").value ? +el("uVend").value : null,
+        p_cod_supervisor: el("uSup").value ? +el("uSup").value : null,
+      };
+      if (role === "vendedor" && payload.p_cod_vendedor == null) return showMsg(el("uMsg"), "Informe o código do vendedor.", "err");
+      if (role === "supervisor" && payload.p_cod_supervisor == null) return showMsg(el("uMsg"), "Informe o código do supervisor.", "err");
+      const { error } = await sb.rpc("admin_criar_usuario", payload);
+      if (error) return showMsg(el("uMsg"), error.message, "err");
+      toast(`Usuário ${payload.p_login} criado.`);
+      e.target.reset();
+      loadUsers();
+    });
+    el("uFilter").addEventListener("input", renderUserRows);
+    renderUserRows();
+  }
+
+  function renderUserRows() {
+    const f = (el("uFilter")?.value || "").toLowerCase();
+    const list = users.filter((u) => !f || u.nome.toLowerCase().includes(f) || u.login.includes(f) || (ROLE_LABEL[u.role] || "").toLowerCase().includes(f));
+    el("uBody").innerHTML = list.map((u) => `
+      <tr>
+        <td><b>${esc(u.nome)}</b></td>
+        <td class="mono">${esc(u.login)}</td>
+        <td><span class="badge ${u.role === "admin" ? "brand" : u.role === "supervisor" ? "warn" : "gray"}">${esc(ROLE_LABEL[u.role])}</span></td>
+        <td class="num">${u.cod_vendedor ?? "—"}</td>
+        <td class="num">${u.cod_supervisor ?? "—"}</td>
+        <td style="white-space:nowrap">
+          <button class="btn ghost sm" data-act="senha" data-id="${u.id}">Redefinir senha</button>
+          <button class="btn ghost sm" data-act="edit" data-id="${u.id}">Editar</button>
+          ${u.id !== ctx.profile.id ? `<button class="btn ghost sm" style="color:var(--bad)" data-act="del" data-id="${u.id}">Excluir</button>` : ""}
+        </td>
+      </tr>`).join("") || `<tr><td colspan="6" class="empty">Nenhum usuário</td></tr>`;
+    el("uBody").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => userAction(b.dataset.act, users.find((u) => u.id === b.dataset.id))));
+  }
+
+  function userAction(act, u) {
+    if (act === "senha") {
+      openModal(`
+        <h3>Redefinir senha — ${esc(u.nome)}</h3>
+        <div class="field"><label>Nova senha</label><input type="text" id="mSenha" placeholder="mín. 4 caracteres"></div>
+        <div id="mMsg"></div>
+        <div class="actions"><button class="btn ghost" data-close>Cancelar</button><button class="btn" id="mOk">Salvar</button></div>`);
+      el("mOk").onclick = async () => {
+        const { error } = await sb.rpc("admin_redefinir_senha", { p_user_id: u.id, p_senha: el("mSenha").value });
+        if (error) return showMsg(el("mMsg"), error.message, "err");
+        closeModal(); toast(`Senha de ${u.login} redefinida.`);
+      };
+    }
+    if (act === "edit") {
+      openModal(`
+        <h3>Editar — ${esc(u.login)}</h3>
+        <div class="field"><label>Nome</label><input type="text" id="mNome" value="${esc(u.nome)}"></div>
+        <div class="field"><label>Perfil</label><select id="mRole">
+          ${["vendedor", "supervisor", "admin"].map((r) => `<option value="${r}" ${u.role === r ? "selected" : ""}>${ROLE_LABEL[r]}</option>`).join("")}</select></div>
+        <div class="form-grid">
+          <div class="field"><label>Cód. vendedor</label><input type="number" id="mVend" value="${u.cod_vendedor ?? ""}"></div>
+          <div class="field"><label>Cód. supervisor</label><input type="number" id="mSup" value="${u.cod_supervisor ?? ""}"></div>
+        </div>
+        <div id="mMsg"></div>
+        <div class="actions"><button class="btn ghost" data-close>Cancelar</button><button class="btn" id="mOk">Salvar</button></div>`);
+      el("mOk").onclick = async () => {
+        const { error } = await sb.rpc("admin_editar_usuario", {
+          p_user_id: u.id, p_nome: el("mNome").value.trim(), p_role: el("mRole").value,
+          p_cod_vendedor: el("mVend").value ? +el("mVend").value : null,
+          p_cod_supervisor: el("mSup").value ? +el("mSup").value : null,
+        });
+        if (error) return showMsg(el("mMsg"), error.message, "err");
+        closeModal(); toast("Usuário atualizado."); loadUsers();
+      };
+    }
+    if (act === "del") {
+      openModal(`
+        <h3>Excluir usuário</h3>
+        <p>Tem certeza que deseja excluir <b>${esc(u.nome)}</b> (${esc(u.login)})? Esta ação não pode ser desfeita.</p>
+        <div id="mMsg"></div>
+        <div class="actions"><button class="btn ghost" data-close>Cancelar</button><button class="btn danger" id="mOk">Excluir</button></div>`);
+      el("mOk").onclick = async () => {
+        const { error } = await sb.rpc("admin_excluir_usuario", { p_user_id: u.id });
+        if (error) return showMsg(el("mMsg"), error.message, "err");
+        closeModal(); toast("Usuário excluído."); loadUsers();
+      };
+    }
+  }
+
+  // =====================================================================
+  //  UPLOAD DA PLANILHA
+  // =====================================================================
+  const COLUMNS = ["codcli","cliente","fantasia","cnpj_cpf","cidade","uf","cod_vendedor","vendedor","cod_supervisor","supervisor",
+    "codprod","descricao","embalagem","unidade","codfornec","fornecedor","primeira_compra_periodo","ultima_compra","dias_sem_comprar",
+    "qtd_pedidos","qtd_notas","qtd_total_comprada","valor_total_comprado","preco_medio","ultimo_preco_pago","estoque_filial_1",
+    "qtd_bloqueada_filial_1","qtd_reservada_filial_1","estoque_disponivel_filial_1","status_ultima_compra"];
+  const INT_COLS = new Set(["codcli","cod_vendedor","cod_supervisor","codprod","codfornec","dias_sem_comprar","qtd_pedidos","qtd_notas","estoque_filial_1","qtd_bloqueada_filial_1","qtd_reservada_filial_1","estoque_disponivel_filial_1"]);
+  const NUM_COLS = new Set(["qtd_total_comprada","valor_total_comprado","preco_medio","ultimo_preco_pago"]);
+  const DATE_COLS = new Set(["primeira_compra_periodo","ultima_compra"]);
+
+  let parsed = null;
+
+  async function renderUpload() {
+    const { data: meta } = await sb.from("mix_meta").select("*").eq("id", 1).maybeSingle();
+    el("tab-upload").innerHTML = `
+      <div class="card card-pad" style="margin-bottom:16px">
+        <h2>Base atual</h2>
+        ${meta?.atualizado_em
+          ? `<p class="sub" style="margin:0">Última atualização em <b>${new Date(meta.atualizado_em).toLocaleString("pt-BR")}</b> — ${fmtInt.format(meta.linhas)} linhas (${esc(meta.arquivo || "")})</p>`
+          : `<p class="sub" style="margin:0">Nenhuma planilha carregada ainda.</p>`}
+      </div>
+      <div class="card card-pad">
+        <h2>Carregar nova planilha</h2>
+        <p class="sub">Aceita <b>.xlsx</b>, <b>.xls</b> ou <b>.csv</b> com as colunas do relatório de mix (CODCLI, CLIENTE, FANTASIA, COD_VENDEDOR, COD_SUPERVISOR, CODPROD…). A base atual é <b>substituída</b> pela nova.<br>
+        <span class="muted">Dica: o formato .xls antigo limita a 65.536 linhas — prefira .xlsx ou .csv para não perder dados.</span></p>
+        <div class="dropzone" id="drop">
+          <input type="file" id="file" accept=".xlsx,.xls,.csv" hidden>
+          <div><b>Clique para escolher</b> ou arraste o arquivo aqui</div>
+          <div style="font-size:13px;margin-top:4px">xlsx · xls · csv</div>
+        </div>
+        <div id="upInfo" style="margin-top:14px"></div>
+        <div class="progress" id="upProg" hidden><div></div></div>
+        <div id="upMsg"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn" id="btnImport" disabled>Substituir base pela planilha</button>
+          <span class="muted" id="upStatus" style="font-size:13px"></span>
+        </div>
+      </div>`;
+
+    const drop = el("drop"), file = el("file");
+    drop.addEventListener("click", () => file.click());
+    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
+    file.addEventListener("change", () => file.files[0] && handleFile(file.files[0]));
+    el("btnImport").addEventListener("click", importRows);
+  }
+
+  function normHeader(h) {
+    return String(h || "").trim().toUpperCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Z0-9]+/g, "_").replace(/^_|_$/g, "").toLowerCase();
+  }
+
+  function toInt(v) { if (v == null || v === "") return null; const n = parseInt(String(v).replace(/\./g, "").replace(",", "."), 10); return isNaN(n) ? null : n; }
+  function toNum(v) {
+    if (v == null || v === "") return null;
+    if (typeof v === "number") return v;
+    let s = String(v).trim();
+    if (/^\d{1,3}(\.\d{3})*(,\d+)?$/.test(s)) s = s.replace(/\./g, "").replace(",", "."); // 1.234,56
+    else s = s.replace(",", ".");
+    const n = parseFloat(s); return isNaN(n) ? null : n;
+  }
+  function toDate(v) {
+    if (v == null || v === "") return null;
+    if (v instanceof Date) return isNaN(v) ? null : `${v.getFullYear()}-${String(v.getMonth() + 1).padStart(2, "0")}-${String(v.getDate()).padStart(2, "0")}`;
+    if (typeof v === "number") { const d = XLSX.SSF.parse_date_code(v); return d ? `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}` : null; }
+    const s = String(v).trim();
+    let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+    m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/); if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+    return null;
+  }
+
+  function handleFile(f) {
+    parsed = null; el("btnImport").disabled = true;
+    showMsg(el("upMsg"), ""); el("upInfo").innerHTML = `<span class="spinner dark"></span> Lendo ${esc(f.name)}…`;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const wb = XLSX.read(e.target.result, { type: "array", cellDates: true, raw: true, codepage: 65001 });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null, raw: true });
+        if (raw.length < 2) throw new Error("Planilha vazia.");
+        const headers = raw[0].map(normHeader);
+        const idx = {}; headers.forEach((h, i) => { if (COLUMNS.includes(h) && idx[h] == null) idx[h] = i; });
+        const missing = ["codcli", "cliente", "cod_vendedor", "cod_supervisor", "codprod", "descricao"].filter((c) => idx[c] == null);
+        if (missing.length) throw new Error("Colunas obrigatórias não encontradas: " + missing.join(", ").toUpperCase());
+        const found = Object.keys(idx);
+        const rows = [];
+        for (let i = 1; i < raw.length; i++) {
+          const r = raw[i]; if (!r || r[idx.codcli] == null || r[idx.codcli] === "") continue;
+          const o = {};
+          for (const c of found) {
+            let v = r[idx[c]];
+            if (INT_COLS.has(c)) v = toInt(v);
+            else if (NUM_COLS.has(c)) v = toNum(v);
+            else if (DATE_COLS.has(c)) v = toDate(v);
+            else v = v == null ? null : String(v).trim();
+            o[c] = v;
+          }
+          if (o.codcli == null || o.codprod == null) continue;
+          rows.push(o);
+        }
+        if (!rows.length) throw new Error("Nenhuma linha válida encontrada.");
+        const clientes = new Set(rows.map((r) => r.codcli)).size;
+        const vend = new Set(rows.map((r) => r.cod_vendedor)).size;
+        const sup = new Set(rows.map((r) => r.cod_supervisor)).size;
+        parsed = { rows, name: f.name };
+        el("upInfo").innerHTML = `
+          <div class="kpis" style="margin:0">
+            <div class="kpi"><div class="l">Linhas</div><div class="v">${fmtInt.format(rows.length)}</div></div>
+            <div class="kpi"><div class="l">Clientes</div><div class="v">${fmtInt.format(clientes)}</div></div>
+            <div class="kpi"><div class="l">Vendedores</div><div class="v">${vend}</div></div>
+            <div class="kpi"><div class="l">Supervisores</div><div class="v">${sup}</div></div>
+          </div>
+          <div class="muted" style="font-size:13px;margin-top:8px">Colunas reconhecidas: ${found.length}/${COLUMNS.length}${found.length < COLUMNS.length ? " (faltando: " + COLUMNS.filter((c) => !found.includes(c)).join(", ") + ")" : ""}</div>
+          ${rows.length === 65535 ? `<div class="msg err">Atenção: exatamente 65.535 linhas — o Excel provavelmente cortou o relatório (limite do .xls). Exporte como .xlsx ou .csv.</div>` : ""}`;
+        el("btnImport").disabled = false;
+      } catch (err) {
+        el("upInfo").innerHTML = ""; showMsg(el("upMsg"), err.message, "err");
+      }
+    };
+    reader.readAsArrayBuffer(f);
+  }
+
+  async function importRows() {
+    if (!parsed) return;
+    const btn = el("btnImport"); btn.disabled = true;
+    const prog = el("upProg"), bar = prog.firstElementChild, st = el("upStatus");
+    prog.hidden = false; bar.style.width = "0%"; showMsg(el("upMsg"), "");
+    try {
+      st.textContent = "Limpando base atual…";
+      let { error } = await sb.rpc("admin_limpar_mix"); if (error) throw error;
+      const rows = parsed.rows, BATCH = 1000;
+      for (let i = 0; i < rows.length; i += BATCH) {
+        const chunk = rows.slice(i, i + BATCH);
+        let tries = 0;
+        while (true) {
+          const { error } = await sb.from("mix").insert(chunk);
+          if (!error) break;
+          if (++tries >= 3) throw error;
+          await new Promise((r) => setTimeout(r, 1200));
+        }
+        const done = Math.min(i + BATCH, rows.length);
+        bar.style.width = Math.round((done / rows.length) * 100) + "%";
+        st.textContent = `Enviando ${fmtInt.format(done)} / ${fmtInt.format(rows.length)} linhas…`;
+      }
+      ({ error } = await sb.rpc("admin_registrar_upload", { p_linhas: rows.length, p_arquivo: parsed.name })); if (error) throw error;
+      st.textContent = ""; showMsg(el("upMsg"), `Base atualizada com ${fmtInt.format(rows.length)} linhas.`, "ok");
+      toast("Planilha importada com sucesso.");
+      parsed = null;
+      setTimeout(renderUpload, 1500);
+    } catch (err) {
+      st.textContent = ""; showMsg(el("upMsg"), "Erro: " + err.message + " — a base pode estar incompleta; envie a planilha novamente.", "err");
+      btn.disabled = false;
+    }
+  }
+
+  // =====================================================================
+  //  EQUIPE PRESENTE NA BASE
+  // =====================================================================
+  async function loadEquipe() {
+    el("tab-equipe").innerHTML = `<div class="card card-pad"><span class="spinner dark"></span></div>`;
+    const { data, error } = await sb.rpc("listar_equipe");
+    if (error) return el("tab-equipe").innerHTML = `<div class="msg err">${esc(error.message)}</div>`;
+    const logins = new Map(users.map((u) => [u.role + ":" + (u.role === "vendedor" ? u.cod_vendedor : u.cod_supervisor), u.login]));
+    el("tab-equipe").innerHTML = `
+      <div class="card card-pad">
+        <h2>Vendedores e supervisores presentes na planilha</h2>
+        <p class="sub">Use estes códigos ao cadastrar usuários. A coluna "Login" mostra se já existe um usuário vinculado ao código.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th class="num">Cód. sup.</th><th>Supervisor</th><th class="num">Cód. vend.</th><th>Vendedor</th><th class="num">Clientes</th><th>Login vendedor</th><th>Login supervisor</th></tr></thead>
+          <tbody>${(data || []).map((r) => `
+            <tr>
+              <td class="num">${r.cod_supervisor ?? ""}</td><td>${esc(r.supervisor || "")}</td>
+              <td class="num">${r.cod_vendedor ?? ""}</td><td><b>${esc(r.vendedor || "")}</b></td>
+              <td class="num">${fmtInt.format(r.clientes)}</td>
+              <td>${logins.get("vendedor:" + r.cod_vendedor) ? `<span class="badge ok">${esc(logins.get("vendedor:" + r.cod_vendedor))}</span>` : `<span class="badge gray">sem usuário</span>`}</td>
+              <td>${logins.get("supervisor:" + r.cod_supervisor) ? `<span class="badge ok">${esc(logins.get("supervisor:" + r.cod_supervisor))}</span>` : `<span class="badge gray">sem usuário</span>`}</td>
+            </tr>`).join("") || `<tr><td colspan="7" class="empty">Base vazia — carregue a planilha primeiro.</td></tr>`}
+          </tbody>
+        </table></div>
+      </div>`;
+  }
+
+  await loadUsers();
+  renderUpload();
+})();
+</script>
+</body>
+</html>
