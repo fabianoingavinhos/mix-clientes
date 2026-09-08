@@ -27,17 +27,20 @@
         <button class="active" data-tab="users">Usuários</button>
         <button data-tab="upload">Planilha do mix</button>
         <button data-tab="equipe">Equipe na base</button>
+        <button data-tab="uso">Uso</button>
       </div>
       <div id="tab-users"></div>
       <div id="tab-upload" hidden></div>
       <div id="tab-equipe" hidden></div>
+      <div id="tab-uso" hidden></div>
     </div>`;
   Mix.bindTopbar();
 
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
-    ["users", "upload", "equipe"].forEach((t) => el("tab-" + t).hidden = t !== b.dataset.tab);
+    ["users", "upload", "equipe", "uso"].forEach((t) => el("tab-" + t).hidden = t !== b.dataset.tab);
     if (b.dataset.tab === "equipe") loadEquipe();
+    if (b.dataset.tab === "uso") loadUso();
   }));
 
   // =====================================================================
@@ -404,6 +407,86 @@
           </tbody>
         </table></div>
       </div>`;
+  }
+
+  // =====================================================================
+  //  USO DA FERRAMENTA
+  // =====================================================================
+  function tempoAtras(iso) {
+    if (!iso) return null;
+    const ms = Date.now() - new Date(iso).getTime(), m = Math.floor(ms / 60000), h = Math.floor(m / 60), d = Math.floor(h / 24);
+    if (m < 1) return "agora"; if (m < 60) return `${m} min atrás`; if (h < 24) return `${h} h atrás`; if (d === 1) return "ontem"; return `${d} dias atrás`;
+  }
+  function fmtDT(iso) { const d = new Date(iso); return d.toLocaleDateString("pt-BR") + " " + d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }); }
+  function badgeAcesso(iso) {
+    if (!iso) return `<span class="badge gray">nunca</span>`;
+    const d = (Date.now() - new Date(iso).getTime()) / 86400000;
+    return `<span class="badge ${d < 1 ? "ok" : d < 7 ? "warn" : "bad"}">${tempoAtras(iso)}</span>`;
+  }
+
+  async function loadUso() {
+    el("tab-uso").innerHTML = `<div class="card card-pad"><span class="spinner dark"></span></div>`;
+    const [{ data: uso, error: e1 }, { data: rec, error: e2 }] = await Promise.all([sb.rpc("admin_uso"), sb.rpc("admin_uso_recente", { limite: 100 })]);
+    if (e1 || e2) return el("tab-uso").innerHTML = `<div class="msg err">${esc((e1 || e2).message)}</div>`;
+    const dia = 86400000, agora = Date.now();
+    const ultimo = (u) => u.ultimo_acesso || u.ultimo_login;
+    const ativos = (dias) => uso.filter((u) => ultimo(u) && agora - new Date(ultimo(u)).getTime() < dias * dia).length;
+    const nunca = uso.filter((u) => !ultimo(u));
+    const consultas30 = uso.reduce((s, u) => s + (+u.consultas_30d || 0), 0);
+    const consultasHoje = uso.reduce((s, u) => s + (+u.consultas_hoje || 0), 0);
+
+    el("tab-uso").innerHTML = `
+      <div class="kpis" style="margin:0 0 16px">
+        <div class="kpi"><div class="l">Usuários cadastrados</div><div class="v">${uso.length}</div><div class="s">${nunca.length} nunca acessaram</div></div>
+        <div class="kpi"><div class="l">Ativos hoje</div><div class="v">${ativos(1)}</div><div class="s">${consultasHoje} consultas hoje</div></div>
+        <div class="kpi"><div class="l">Ativos em 7 dias</div><div class="v">${ativos(7)}</div></div>
+        <div class="kpi"><div class="l">Ativos em 30 dias</div><div class="v">${ativos(30)}</div><div class="s">${fmtInt.format(consultas30)} consultas no período</div></div>
+      </div>
+
+      <div class="card card-pad" style="margin-bottom:16px">
+        <div class="row" style="justify-content:space-between;margin-bottom:10px">
+          <h2 style="margin:0">Uso por usuário</h2>
+          <div class="row"><input type="search" id="usoFilter" placeholder="Filtrar…" style="max-width:220px"><button class="btn ghost sm" id="usoRefresh">↻ Atualizar</button></div>
+        </div>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Usuário</th><th>Perfil</th><th>Último acesso</th><th class="num">Acessos 30d</th><th class="num">Consultas 30d</th><th class="num">Clientes 30d</th><th class="num">Hoje</th><th class="num">Total</th></tr></thead>
+          <tbody id="usoBody"></tbody>
+        </table></div>
+        <p class="muted" style="font-size:12px;margin:10px 0 0">"Acesso" = abertura do sistema (contado no máximo 1x por minuto). "Consulta" = cliente aberto na tela de mix. Último acesso considera também o login pelo Supabase.</p>
+      </div>
+
+      <div class="card card-pad">
+        <h2>Últimas consultas</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Quando</th><th>Usuário</th><th>Ação</th><th>Cliente</th></tr></thead>
+          <tbody>${(rec || []).map((r) => `
+            <tr>
+              <td style="white-space:nowrap">${fmtDT(r.criado_em)}<div class="small muted">${tempoAtras(r.criado_em)}</div></td>
+              <td><b>${esc(r.nome)}</b><div class="small muted">${esc(r.login)} · ${esc(ROLE_LABEL[r.role] || r.role)}</div></td>
+              <td>${r.tipo === "consulta" ? `<span class="badge brand">consulta</span>` : `<span class="badge gray">acesso</span>`}</td>
+              <td>${r.codcli ? `<span class="mono">${r.codcli}</span> ${esc(r.cliente || "")}${r.fantasia ? ` <span class="muted">· ${esc(r.fantasia)}</span>` : ""}` : "—"}</td>
+            </tr>`).join("") || `<tr><td colspan="4" class="empty">Nenhum registro ainda.</td></tr>`}
+          </tbody>
+        </table></div>
+      </div>`;
+
+    const renderRows = () => {
+      const f = (el("usoFilter").value || "").toLowerCase();
+      el("usoBody").innerHTML = uso.filter((u) => !f || u.nome.toLowerCase().includes(f) || u.login.includes(f) || (ROLE_LABEL[u.role] || "").toLowerCase().includes(f)).map((u) => `
+        <tr class="${!ultimo(u) ? "muted" : ""}">
+          <td><b>${esc(u.nome)}</b><div class="small muted">${esc(u.login)}${u.cod_vendedor != null ? " · vend. " + u.cod_vendedor : ""}${u.cod_supervisor != null && u.role === "supervisor" ? " · sup. " + u.cod_supervisor : ""}</div></td>
+          <td><span class="badge ${u.role === "admin" ? "brand" : u.role === "supervisor" ? "warn" : "gray"}">${esc(ROLE_LABEL[u.role])}</span></td>
+          <td>${badgeAcesso(ultimo(u))}${ultimo(u) ? `<div class="small muted">${fmtDT(ultimo(u))}</div>` : ""}</td>
+          <td class="num">${u.acessos_30d}</td>
+          <td class="num"><b>${u.consultas_30d}</b></td>
+          <td class="num">${u.clientes_30d}</td>
+          <td class="num">${u.consultas_hoje}</td>
+          <td class="num muted">${u.consultas_total}</td>
+        </tr>`).join("") || `<tr><td colspan="8" class="empty">Nenhum usuário</td></tr>`;
+    };
+    el("usoFilter").addEventListener("input", renderRows);
+    el("usoRefresh").addEventListener("click", loadUso);
+    renderRows();
   }
 
   await loadUsers();

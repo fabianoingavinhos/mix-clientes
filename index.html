@@ -98,12 +98,20 @@
     Mix.bindTopbar();
     renderDetail();
     loadMeta();
+    registrar("acesso");
 
     const q = el("q");
     let t;
     q.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => search(q.value), 250); });
     q.addEventListener("keydown", (e) => { if (e.key === "Enter") { clearTimeout(t); search(q.value); } });
     search("");
+  }
+
+  // Registro de uso (silencioso): acesso ao sistema e consulta de cliente
+  let ultimoAcessoLog = 0;
+  function registrar(tipo, codcli = null) {
+    if (tipo === "acesso") { if (Date.now() - ultimoAcessoLog < 60000) return; ultimoAcessoLog = Date.now(); }
+    sb.from("acessos").insert({ user_id: state.profile.id, tipo, codcli }).then(() => {}, () => {});
   }
 
   async function loadMeta() {
@@ -158,6 +166,7 @@
     const { data, error } = await sb.from("mix").select("*").eq("codcli", codcli).limit(5000);
     if (error) { el("detail").innerHTML = `<div class="card card-pad"><div class="msg err">${esc(error.message)}</div></div>`; return; }
     state.mix = data || [];
+    registrar("consulta", codcli);
     ({ pedido: state.pedido, estoque: state.estoque } = loadPedido(codcli));
     renderDetail();
   }

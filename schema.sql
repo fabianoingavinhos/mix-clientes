@@ -318,6 +318,65 @@ end;
 $$;
 
 -- ------------------------------------------------------------
+-- 6. REGISTRO DE USO (acessos e consultas)
+-- ------------------------------------------------------------
+create table if not exists public.acessos (
+  id         bigserial primary key,
+  user_id    uuid not null references auth.users(id) on delete cascade,
+  tipo       text not null check (tipo in ('acesso','consulta')),
+  codcli     integer,
+  criado_em  timestamptz not null default now()
+);
+create index if not exists acessos_user_data_idx on public.acessos (user_id, criado_em desc);
+create index if not exists acessos_data_idx on public.acessos (criado_em desc);
+alter table public.acessos enable row level security;
+
+drop policy if exists acessos_insert_proprio on public.acessos;
+create policy acessos_insert_proprio on public.acessos
+  for insert to authenticated with check (user_id = auth.uid());
+drop policy if exists acessos_select_admin on public.acessos;
+create policy acessos_select_admin on public.acessos
+  for select to authenticated using (public.is_admin());
+
+-- Resumo de uso por usuário (admin)
+create or replace function public.admin_uso()
+returns table (
+  id uuid, login text, nome text, role text, cod_vendedor integer, cod_supervisor integer,
+  ultimo_login timestamptz, ultimo_acesso timestamptz,
+  acessos_30d bigint, consultas_30d bigint, consultas_hoje bigint, clientes_30d bigint, consultas_total bigint
+)
+language sql stable security definer set search_path = public, auth
+as $$
+  select p.id, p.login, p.nome, p.role, p.cod_vendedor, p.cod_supervisor,
+         u.last_sign_in_at,
+         (select max(a.criado_em) from public.acessos a where a.user_id = p.id),
+         (select count(*) from public.acessos a where a.user_id = p.id and a.tipo = 'acesso'   and a.criado_em >= now() - interval '30 days'),
+         (select count(*) from public.acessos a where a.user_id = p.id and a.tipo = 'consulta' and a.criado_em >= now() - interval '30 days'),
+         (select count(*) from public.acessos a where a.user_id = p.id and a.tipo = 'consulta' and a.criado_em >= date_trunc('day', now() at time zone 'America/Recife') at time zone 'America/Recife'),
+         (select count(distinct a.codcli) from public.acessos a where a.user_id = p.id and a.tipo = 'consulta' and a.criado_em >= now() - interval '30 days'),
+         (select count(*) from public.acessos a where a.user_id = p.id and a.tipo = 'consulta')
+  from public.profiles p
+  left join auth.users u on u.id = p.id
+  where public.is_admin()
+  order by coalesce((select max(a.criado_em) from public.acessos a where a.user_id = p.id), u.last_sign_in_at) desc nulls last, p.nome;
+$$;
+
+-- Últimas consultas (admin)
+create or replace function public.admin_uso_recente(limite integer default 100)
+returns table (criado_em timestamptz, login text, nome text, role text, tipo text, codcli integer, cliente text, fantasia text)
+language sql stable security definer set search_path = public
+as $$
+  select a.criado_em, p.login, p.nome, p.role, a.tipo, a.codcli,
+         (select max(m.cliente)  from public.mix m where m.codcli = a.codcli),
+         (select max(m.fantasia) from public.mix m where m.codcli = a.codcli)
+  from public.acessos a
+  join public.profiles p on p.id = a.user_id
+  where public.is_admin()
+  order by a.criado_em desc
+  limit limite;
+$$;
+
+-- ------------------------------------------------------------
 -- 5. USUÁRIO ADMIN INICIAL
 --    login: admin   senha: admin123   (troque depois no painel!)
 -- ------------------------------------------------------------
