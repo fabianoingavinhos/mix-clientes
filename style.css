@@ -165,7 +165,11 @@ td .small { color: var(--muted); font-size: 12px; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 /* ---------- Sugestão de pedido ---------- */
-td.qtd-cell { width: 84px; }
+td.inp-cell { width: 84px; }
+.chk { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; color: var(--ink); cursor: pointer; user-select: none; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: #fff; margin: 0; }
+.chk input { accent-color: var(--brand); width: 16px; height: 16px; margin: 0; }
+input.est { width: 72px; padding: 6px 8px; text-align: right; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; font-variant-numeric: tabular-nums; }
+input.est:focus { border-color: var(--brand-2); box-shadow: 0 0 0 3px rgba(168,50,63,.15); outline: none; }
 input.qtd { width: 72px; padding: 6px 8px; text-align: right; border: 1px solid var(--line); border-radius: 8px; font-size: 14px; font-variant-numeric: tabular-nums; }
 input.qtd:focus { border-color: var(--brand-2); box-shadow: 0 0 0 3px rgba(168,50,63,.15); outline: none; }
 tbody tr.has-qtd td { background: #fff8e6; }
@@ -222,9 +226,16 @@ tbody tr.has-qtd input.qtd { border-color: var(--warn); font-weight: 700; }
   .table-wrap.cards tr:hover { background: #fff; }
   .modal { padding: 18px; }
   .login-card { padding: 24px 20px; }
-  .table-wrap.cards td.qtd-cell { grid-column: 1 / -1; width: auto; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 4px; padding-top: 8px; border-top: 1px dashed var(--line); }
-  .table-wrap.cards td.qtd-cell::before { margin: 0; font-size: 12px; }
-  .table-wrap.cards input.qtd { width: 110px; font-size: 16px; padding: 8px 10px; }
+  .table-wrap.cards td.inp-cell { width: auto; display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 4px; padding-top: 8px; border-top: 1px dashed var(--line); }
+  .table-wrap.cards td.inp-cell { grid-column: 1 / -1; }
+  .table-wrap.cards.list-mode td.inp-cell { grid-column: auto; }
+  .table-wrap.cards.list-mode tr { padding: 10px 12px; grid-template-columns: auto 1fr 1fr; align-items: end; }
+  .table-wrap.cards.list-mode td.prod { grid-column: 1 / -1; }
+  .table-wrap.cards.list-mode td.inp-cell { margin-top: 0; padding-top: 0; border-top: 0; flex-direction: column; align-items: flex-start; gap: 3px; }
+  .table-wrap.cards.list-mode input.qtd, .table-wrap.cards.list-mode input.est { width: 100%; }
+  .table-wrap.cards td.inp-cell::before { margin: 0; font-size: 12px; }
+  .table-wrap.cards input.qtd, .table-wrap.cards input.est { width: 92px; font-size: 16px; padding: 8px 10px; }
+  .toolbar .chk { flex: 1 1 45%; justify-content: center; padding: 10px; font-size: 15px; }
   .table-wrap.cards tr.has-qtd { border-color: var(--warn); }
   .pedido-bar { position: sticky; bottom: 8px; box-shadow: var(--shadow); z-index: 5; }
   .pedido-bar .pb-actions { width: 100%; }

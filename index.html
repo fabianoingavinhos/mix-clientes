@@ -56,12 +56,19 @@
 
   // ---------------- APP ----------------
   const isVendedor = () => state.profile?.role === "vendedor";
-  let state = { profile: null, results: [], selected: null, mix: [], filter: "", status: "", sort: { key: "valor_total_comprado", dir: -1 }, pedido: {} };
+  let state = { profile: null, results: [], selected: null, mix: [], filter: "", status: "", sort: { key: "valor_total_comprado", dir: -1 }, pedido: {}, estoque: {} };
 
   // Rascunho de pedido por cliente (fica salvo no navegador)
   const pedidoKey = (codcli) => `mix_pedido_${codcli}`;
-  function loadPedido(codcli) { try { return JSON.parse(localStorage.getItem(pedidoKey(codcli)) || "{}"); } catch { return {}; } }
-  function savePedido() { try { if (state.selected) localStorage.setItem(pedidoKey(state.selected.codcli), JSON.stringify(state.pedido)); } catch {} }
+  function loadPedido(codcli) {
+    try {
+      const o = JSON.parse(localStorage.getItem(pedidoKey(codcli)) || "{}");
+      return o && o.pedido ? o : { pedido: o || {}, estoque: {} }; // compatível com o formato antigo
+    } catch { return { pedido: {}, estoque: {} }; }
+  }
+  function savePedido() { try { if (state.selected) localStorage.setItem(pedidoKey(state.selected.codcli), JSON.stringify({ pedido: state.pedido, estoque: state.estoque })); } catch {} }
+  // Modo "apenas listagem" (lembrado no navegador)
+  let listMode = false; try { listMode = localStorage.getItem("mix_listmode") === "1"; } catch {}
 
   async function renderApp(ctx) {
     state.profile = ctx.profile;
@@ -151,7 +158,7 @@
     const { data, error } = await sb.from("mix").select("*").eq("codcli", codcli).limit(5000);
     if (error) { el("detail").innerHTML = `<div class="card card-pad"><div class="msg err">${esc(error.message)}</div></div>`; return; }
     state.mix = data || [];
-    state.pedido = loadPedido(codcli);
+    ({ pedido: state.pedido, estoque: state.estoque } = loadPedido(codcli));
     renderDetail();
   }
 
@@ -203,6 +210,7 @@
 
         <div class="toolbar">
           <input type="search" id="fMix" placeholder="${isVendedor() ? "Filtrar produto…" : "Filtrar produto ou fornecedor…"}" value="${esc(state.filter)}">
+          <label class="chk" title="Mostra só código, produto, estoque e quantidade sugerida"><input type="checkbox" id="fList" ${listMode ? "checked" : ""}> Apenas listagem</label>
           <select id="fStatus">
             <option value="">Todos os status</option>
             ${statuses.map((s) => `<option value="${esc(s)}" ${state.status === s ? "selected" : ""}>${esc(s)}</option>`).join("")}
@@ -230,19 +238,22 @@
     el("fStatus").addEventListener("change", (e) => { state.status = e.target.value; renderTable(); });
     el("btnExport").addEventListener("click", exportExcel);
     el("tableWrap").addEventListener("input", (e) => {
-      if (!e.target.classList.contains("qtd")) return;
+      const isQtd = e.target.classList.contains("qtd"), isEst = e.target.classList.contains("est");
+      if (!isQtd && !isEst) return;
       const cod = e.target.dataset.cod, v = parseInt(e.target.value, 10);
-      if (v > 0) state.pedido[cod] = v; else delete state.pedido[cod];
-      e.target.closest("tr")?.classList.toggle("has-qtd", v > 0);
+      const map = isQtd ? state.pedido : state.estoque;
+      if (!isNaN(v) && v >= 0 && e.target.value !== "") map[cod] = v; else delete map[cod];
+      if (isQtd) e.target.closest("tr")?.classList.toggle("has-qtd", v > 0);
       savePedido(); updatePedidoBar();
     });
     el("tableWrap").addEventListener("keydown", (e) => {
-      if (e.target.classList.contains("qtd") && e.key === "Enter") { // Enter pula para a próxima quantidade
+      if ((e.target.classList.contains("qtd") || e.target.classList.contains("est")) && e.key === "Enter") { // Enter pula para o próximo campo
         e.preventDefault();
-        const all = [...el("tableWrap").querySelectorAll("input.qtd")]; const i = all.indexOf(e.target);
+        const all = [...el("tableWrap").querySelectorAll("input.qtd, input.est")]; const i = all.indexOf(e.target);
         if (all[i + 1]) { all[i + 1].focus(); all[i + 1].select(); }
       }
     });
+    el("fList").addEventListener("change", (e) => { listMode = e.target.checked; try { localStorage.setItem("mix_listmode", listMode ? "1" : "0"); } catch {} renderDetail(); });
     el("pbExcel").addEventListener("click", exportPedidoExcel);
     el("pbPdf").addEventListener("click", exportPedidoPdf);
     el("pbLimpar").addEventListener("click", () => { state.pedido = {}; savePedido(); renderTable(); updatePedidoBar(); });
@@ -256,7 +267,8 @@
   const ALL_COLS = [
     { key: "codprod", label: "Cód.", num: true, v: true, cell: (r) => `<td class="num mono">${r.codprod ?? ""}</td>` },
     { key: "descricao", label: "Produto", v: true, cell: (r) => `<td class="prod"><div class="desc">${esc(r.descricao)}</div><div class="small">${esc(r.embalagem || "")} ${r.unidade ? "· " + esc(r.unidade) : ""}</div></td>` },
-    { key: "pedido", label: "Qtd sugerida", num: true, v: true, cell: (r) => `<td class="num qtd-cell"><input type="number" min="0" step="1" inputmode="numeric" class="qtd" data-cod="${r.codprod}" value="${state.pedido[r.codprod] ?? ""}" placeholder="0" aria-label="Quantidade sugerida"></td>` },
+    { key: "estoque_cli", label: "Estoque", num: true, v: true, list: true, cell: (r) => `<td class="num inp-cell est-cell"><input type="number" min="0" step="1" inputmode="numeric" class="est" data-cod="${r.codprod}" value="${state.estoque[r.codprod] ?? ""}" placeholder="—" aria-label="Estoque no cliente"></td>` },
+    { key: "pedido", label: "Qtd sugerida", num: true, v: true, list: true, cell: (r) => `<td class="num inp-cell qtd-cell"><input type="number" min="0" step="1" inputmode="numeric" class="qtd" data-cod="${r.codprod}" value="${state.pedido[r.codprod] ?? ""}" placeholder="0" aria-label="Quantidade sugerida"></td>` },
     { key: "fornecedor", label: "Fornecedor", cell: (r) => `<td class="small forn">${esc(r.fornecedor || "")}</td>` },
     { key: "ultima_compra", label: "Última compra", v: true, cell: (r) => `<td>${fmtDate(r.ultima_compra)}<div class="small">1ª: ${fmtDate(r.primeira_compra_periodo)}</div></td>` },
     { key: "dias_sem_comprar", label: "Dias s/ comprar", num: true, v: true, cell: (r) => `<td class="num">${r.dias_sem_comprar ?? ""}</td>` },
@@ -268,7 +280,11 @@
     { key: "ultimo_preco_pago", label: "Último preço", num: true, cell: (r) => `<td class="num">${r.ultimo_preco_pago != null ? fmtBRL.format(r.ultimo_preco_pago) : ""}</td>` },
     { key: "estoque_disponivel_filial_1", label: "Estoque disp.", num: true, cell: (r) => `<td class="num ${(r.estoque_disponivel_filial_1 ?? 1) <= 0 ? "muted" : ""}">${r.estoque_disponivel_filial_1 != null ? fmtInt.format(r.estoque_disponivel_filial_1) : ""}</td>` },
   ];
-  const visibleCols = () => isVendedor() ? ALL_COLS.filter((c) => c.v) : ALL_COLS;
+  const visibleCols = () => {
+    if (listMode) return ALL_COLS.filter((c) => c.list || c.key === "codprod" || c.key === "descricao");
+    const cols = isVendedor() ? ALL_COLS.filter((c) => c.v) : ALL_COLS;
+    return cols.filter((c) => c.key !== "estoque_cli"); // estoque só no modo listagem
+  };
 
   function filteredRows() {
     const f = state.filter.trim().toLowerCase();
@@ -277,7 +293,8 @@
       (!state.status || r.status_ultima_compra === state.status));
     const { key, dir } = state.sort;
     rows.sort((a, b) => {
-      const va = key === "pedido" ? (state.pedido[a.codprod] ?? null) : a[key], vb = key === "pedido" ? (state.pedido[b.codprod] ?? null) : b[key];
+      const pick = (r) => key === "pedido" ? (state.pedido[r.codprod] ?? null) : key === "estoque_cli" ? (state.estoque[r.codprod] ?? null) : r[key];
+      const va = pick(a), vb = pick(b);
       if (va == null && vb == null) return 0;
       if (va == null) return 1; if (vb == null) return -1;
       if (typeof va === "number" || !isNaN(+va) && !isNaN(+vb) && va !== "" && vb !== "") return (+va - +vb) * dir;
@@ -290,6 +307,7 @@
     const rows = filteredRows();
     const COLS = visibleCols();
     el("countInfo").textContent = `${rows.length} de ${state.mix.length} itens`;
+    el("tableWrap").classList.toggle("list-mode", listMode);
     el("tableWrap").innerHTML = `
       <table>
         <thead><tr>${COLS.map((c) => `<th class="${c.num ? "num" : ""}" data-key="${c.key}">${c.label}${state.sort.key === c.key ? `<span class="arrow">${state.sort.dir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}</tr></thead>
@@ -325,7 +343,7 @@
   // ---------- Sugestão de pedido ----------
   function pedidoRows() {
     return state.mix.filter((r) => state.pedido[r.codprod] > 0)
-      .map((r) => ({ ...r, qtd: state.pedido[r.codprod] }))
+      .map((r) => ({ ...r, qtd: state.pedido[r.codprod], est: state.estoque[r.codprod] ?? null }))
       .sort((a, b) => String(a.descricao).localeCompare(String(b.descricao), "pt-BR"));
   }
   function updatePedidoBar() {
@@ -348,12 +366,12 @@
       ["SUGESTÃO DE PEDIDO"],
       ["Cliente", `${c.codcli} - ${c.cliente}`], ["Fantasia", c.fantasia || ""], ["CNPJ/CPF", c.cnpj_cpf || ""],
       ["Cidade", `${c.cidade || ""}${c.uf ? "/" + c.uf : ""}`], ["Vendedor", `${c.cod_vendedor ?? ""} - ${c.vendedor || ""}`], ["Data", hoje], [],
-      ["Cód. Produto", "Produto", "Embalagem", "Última compra", "Dias s/ comprar", "Status", "Qtd sugerida"],
+      ["Cód. Produto", "Produto", "Embalagem", "Última compra", "Dias s/ comprar", "Status", "Estoque", "Qtd sugerida"],
     ];
-    const body = rows.map((r) => [r.codprod, r.descricao, r.embalagem || "", fmtDate(r.ultima_compra), r.dias_sem_comprar ?? "", r.status_ultima_compra || "", r.qtd]);
-    body.push([], ["", "", "", "", "", "TOTAL", rows.reduce((s, r) => s + r.qtd, 0)]);
+    const body = rows.map((r) => [r.codprod, r.descricao, r.embalagem || "", fmtDate(r.ultima_compra), r.dias_sem_comprar ?? "", r.status_ultima_compra || "", r.est ?? "", r.qtd]);
+    body.push([], ["", "", "", "", "", "", "TOTAL", rows.reduce((s, r) => s + r.qtd, 0)]);
     const ws = XLSX.utils.aoa_to_sheet([...head, ...body]);
-    ws["!cols"] = [{ wch: 12 }, { wch: 45 }, { wch: 12 }, { wch: 14 }, { wch: 15 }, { wch: 20 }, { wch: 13 }];
+    ws["!cols"] = [{ wch: 12 }, { wch: 45 }, { wch: 12 }, { wch: 14 }, { wch: 15 }, { wch: 20 }, { wch: 10 }, { wch: 13 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Pedido");
     XLSX.writeFile(wb, nomeArq + ".xlsx");
@@ -375,13 +393,13 @@
     info.forEach((t, i) => doc.text(t, 14, 24 + i * 5.5));
     doc.autoTable({
       startY: 24 + info.length * 5.5 + 3,
-      head: [["Cód.", "Produto", "Emb.", "Última compra", "Dias s/c", "Status", "Qtd"]],
-      body: rows.map((r) => [r.codprod, r.descricao, r.embalagem || "", fmtDate(r.ultima_compra), r.dias_sem_comprar ?? "", r.status_ultima_compra || "", r.qtd]),
-      foot: [["", "", "", "", "", "TOTAL", total]],
+      head: [["Cód.", "Produto", "Emb.", "Última compra", "Dias s/c", "Status", "Estoque", "Qtd"]],
+      body: rows.map((r) => [r.codprod, r.descricao, r.embalagem || "", fmtDate(r.ultima_compra), r.dias_sem_comprar ?? "", r.status_ultima_compra || "", r.est ?? "", r.qtd]),
+      foot: [["", "", "", "", "", "", "TOTAL", total]],
       styles: { fontSize: 8.5, cellPadding: 2 },
       headStyles: { fillColor: [122, 31, 43] },
       footStyles: { fillColor: [240, 240, 240], textColor: 20, fontStyle: "bold" },
-      columnStyles: { 0: { cellWidth: 14 }, 1: { cellWidth: 70 }, 2: { cellWidth: 18 }, 3: { cellWidth: 24 }, 4: { cellWidth: 16, halign: "right" }, 5: { cellWidth: 30 }, 6: { cellWidth: 14, halign: "right", fontStyle: "bold" } },
+      columnStyles: { 0: { cellWidth: 14 }, 1: { cellWidth: 60 }, 2: { cellWidth: 17 }, 3: { cellWidth: 22 }, 4: { cellWidth: 15, halign: "right" }, 5: { cellWidth: 26 }, 6: { cellWidth: 16, halign: "right" }, 7: { cellWidth: 14, halign: "right", fontStyle: "bold" } },
       didDrawPage: () => {
         doc.setFontSize(8); doc.setTextColor(120);
         doc.text(`${cfg.EMPRESA || "Mix Clientes"} · gerado em ${new Date().toLocaleString("pt-BR")} · página ${doc.internal.getNumberOfPages()}`, 14, doc.internal.pageSize.getHeight() - 8);
@@ -399,9 +417,9 @@
       <p><b>Cliente:</b> ${esc(c.codcli)} - ${esc(c.cliente)}</p>${c.fantasia ? `<p><b>Fantasia:</b> ${esc(c.fantasia)}</p>` : ""}
       <p><b>CNPJ/CPF:</b> ${esc(c.cnpj_cpf || "—")} &nbsp; <b>Cidade:</b> ${esc(c.cidade || "")}${c.uf ? "/" + esc(c.uf) : ""}</p>
       <p><b>Vendedor:</b> ${esc(c.cod_vendedor ?? "")} - ${esc(c.vendedor || "")} &nbsp; <b>Data:</b> ${hoje}</p>
-      <table><thead><tr><th>Cód.</th><th>Produto</th><th>Emb.</th><th>Última compra</th><th class="n">Dias s/c</th><th>Status</th><th class="n">Qtd</th></tr></thead>
-      <tbody>${rows.map((r) => `<tr><td>${r.codprod}</td><td>${esc(r.descricao)}</td><td>${esc(r.embalagem || "")}</td><td>${fmtDate(r.ultima_compra)}</td><td class="n">${r.dias_sem_comprar ?? ""}</td><td>${esc(r.status_ultima_compra || "")}</td><td class="n"><b>${r.qtd}</b></td></tr>`).join("")}</tbody>
-      <tfoot><tr><td colspan="6">TOTAL</td><td class="n">${total}</td></tr></tfoot></table>
+      <table><thead><tr><th>Cód.</th><th>Produto</th><th>Emb.</th><th>Última compra</th><th class="n">Dias s/c</th><th>Status</th><th class="n">Estoque</th><th class="n">Qtd</th></tr></thead>
+      <tbody>${rows.map((r) => `<tr><td>${r.codprod}</td><td>${esc(r.descricao)}</td><td>${esc(r.embalagem || "")}</td><td>${fmtDate(r.ultima_compra)}</td><td class="n">${r.dias_sem_comprar ?? ""}</td><td>${esc(r.status_ultima_compra || "")}</td><td class="n">${r.est ?? ""}</td><td class="n"><b>${r.qtd}</b></td></tr>`).join("")}</tbody>
+      <tfoot><tr><td colspan="7">TOTAL</td><td class="n">${total}</td></tr></tfoot></table>
       <scr`+`ipt>window.onload=()=>window.print()</scr`+`ipt></body></html>`);
     w.document.close();
   }
