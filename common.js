@@ -76,7 +76,7 @@
 
   function renderTopbar(profile, active) {
     const nav = [
-      `<a href="index.html" class="${active === "app" ? "active" : ""}">Consulta</a>`,
+      `<a href="index.html" class="${active === "app" ? "active" : ""}">Consulta mix</a>`,
       `<a href="roteiro.html" class="${active === "roteiro" ? "active" : ""}">Roteiro</a>`,
       `<a href="clientes.html" class="${active === "clientes" ? "active" : ""}">Clientes</a>`,
       profile.role === "admin" ? `<a href="admin.html" class="${active === "admin" ? "active" : ""}">Administração</a>` : "",

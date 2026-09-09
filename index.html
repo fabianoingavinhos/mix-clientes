@@ -10,6 +10,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
 <script src="config.js"></script>
+<script src="logo.js"></script>
 <script src="common.js"></script>
 </head>
 <body>
@@ -175,6 +176,11 @@
     const { data, error } = await sb.from("mix").select("*").eq("codcli", codcli).limit(5000);
     if (error) { el("detail").innerHTML = `<div class="card card-pad"><div class="msg err">${esc(error.message)}</div></div>`; return; }
     state.mix = data || [];
+    state.periodicidade = null;
+    sb.from("roteiro").select("periodicidade").eq("codcli", codcli).then(({ data: rt }) => {
+      const per = (rt || []).map((r) => r.periodicidade).filter((v) => v > 0);
+      state.periodicidade = per.length ? Math.min(...per) : null;
+    }, () => {});
     registrar("consulta", codcli);
     ({ pedido: state.pedido, estoque: state.estoque } = loadPedido(codcli));
     renderDetail();
@@ -245,6 +251,7 @@
         <div class="pedido-bar" id="pedidoBar">
           <div class="pb-info">📝 <b>Sugestão de pedido:</b> <span id="pbItens">0</span> itens · <span id="pbUnid">0</span> unidades</div>
           <div class="pb-actions">
+            <button class="btn ghost sm" id="pbCalc" title="Sugere quantidades a partir do histórico de compras">✨ Calcular sugestão</button>
             <button class="btn sm" id="pbExcel">Excel</button>
             <button class="btn sm" id="pbPdf">PDF</button>
             <button class="btn ghost sm" id="pbLimpar">Limpar</button>
@@ -275,6 +282,7 @@
     el("pbExcel").addEventListener("click", exportPedidoExcel);
     el("pbPdf").addEventListener("click", exportPedidoPdf);
     el("pbLimpar").addEventListener("click", () => { state.pedido = {}; savePedido(); renderTable(); updatePedidoBar(); });
+    el("pbCalc").addEventListener("click", abrirCalculo);
     updatePedidoBar();
     el("btnBack").addEventListener("click", () => { el("grid").classList.remove("has-sel"); state.selected = null; state.mix = []; renderResults(); renderDetail(); });
     el("fSort").addEventListener("change", (e) => { const [k, d] = e.target.value.split("|"); state.sort = { key: k, dir: +d }; renderTable(); });
@@ -372,6 +380,70 @@
     bar.classList.toggle("active", rows.length > 0);
     el("pbExcel").disabled = el("pbPdf").disabled = el("pbLimpar").disabled = rows.length === 0;
   }
+  // ---------- Cálculo automático da quantidade sugerida ----------
+  // Consumo diário = qtd total comprada / dias em que o produto esteve "ativo" no período
+  // (da 1ª à última compra + um intervalo médio entre pedidos). Sugestão = consumo × dias de cobertura − estoque informado.
+  function calcularSugestao(r, cobertura) {
+    const qtd = +r.qtd_total_comprada || 0, ped = +r.qtd_pedidos || 0;
+    if (qtd <= 0 || !r.primeira_compra_periodo || !r.ultima_compra) return { qtd: 0, motivo: "sem histórico" };
+    const span = Math.max(0, diasEntre(r.primeira_compra_periodo, r.ultima_compra));
+    const intervalo = ped > 1 ? span / (ped - 1) : 30;              // dias entre pedidos
+    const diasAtivos = Math.max(30, span + intervalo);               // janela de consumo
+    const consumoDia = qtd / diasAtivos;
+    const semComprar = r.dias_sem_comprar ?? diasDesde(r.ultima_compra);
+    if (semComprar > Math.max(180, intervalo * 3)) return { qtd: 0, motivo: "parou de comprar", consumoDia, intervalo };
+    const estoque = state.estoque[r.codprod] ?? 0;
+    let sug = Math.ceil(consumoDia * cobertura - estoque);
+    if (sug < 0) sug = 0;
+    const disp = r.estoque_disponivel_filial_1;
+    if (sug > 0 && disp != null && disp >= 0 && sug > disp) sug = disp;   // limita ao estoque disponível da filial
+    return { qtd: sug, consumoDia, intervalo, motivo: sug ? "" : "estoque cobre o período" };
+  }
+  function diasEntre(a, b) { return Math.round((new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 86400000); }
+
+  function abrirCalculo() {
+    if (!state.mix.length) return;
+    const per = state.periodicidade;
+    const padrao = per ? per + 7 : 30;
+    Mix.openModal(`
+      <h3>Calcular quantidade sugerida</h3>
+      <p class="sub" style="margin:0 0 10px">Usa o histórico de cada produto (quantidade comprada, nº de pedidos e datas) para estimar o consumo e sugerir a quantidade para os próximos dias, descontando o estoque que você informou.</p>
+      <div class="form-grid">
+        <div class="field"><label>Cobertura (dias)</label><input type="number" id="calcDias" min="7" max="120" value="${padrao}">
+          <span class="muted" style="font-size:12px">${per ? `visita do promotor a cada ${per} dias + 7 de segurança` : "sem roteiro cadastrado — padrão 30 dias"}</span></div>
+        <div class="field"><label>Quantidades já digitadas</label>
+          <select id="calcSubst"><option value="0">Manter (só preencher vazias)</option><option value="1">Substituir pelas calculadas</option></select></div>
+      </div>
+      <label class="chk"><input type="checkbox" id="calcAtivos" checked> Só produtos comprados nos últimos 180 dias</label>
+      <div id="calcPrev" class="muted" style="font-size:13px;margin-top:8px"></div>
+      <div class="actions"><button class="btn ghost" data-close>Cancelar</button><button class="btn" id="calcOk">Aplicar</button></div>`);
+    const prever = () => {
+      const dias = +el("calcDias").value || padrao, subst = el("calcSubst").value === "1", ativos = el("calcAtivos").checked;
+      let n = 0, u = 0;
+      state.mix.forEach((r) => {
+        if (ativos && (r.dias_sem_comprar ?? 9999) > 180) return;
+        if (!subst && state.pedido[r.codprod] > 0) return;
+        const s = calcularSugestao(r, dias); if (s.qtd > 0) { n++; u += s.qtd; }
+      });
+      el("calcPrev").textContent = `Prévia: ${n} produtos, ${fmtInt.format(u)} unidades.`;
+      return { dias, subst, ativos };
+    };
+    ["calcDias", "calcSubst", "calcAtivos"].forEach((id) => el(id).addEventListener("input", prever));
+    prever();
+    el("calcOk").onclick = () => {
+      const { dias, subst, ativos } = prever();
+      let n = 0;
+      state.mix.forEach((r) => {
+        if (ativos && (r.dias_sem_comprar ?? 9999) > 180) return;
+        if (!subst && state.pedido[r.codprod] > 0) return;
+        const s = calcularSugestao(r, dias);
+        if (s.qtd > 0) { state.pedido[r.codprod] = s.qtd; n++; } else if (subst) delete state.pedido[r.codprod];
+      });
+      savePedido(); Mix.closeModal(); renderTable(); updatePedidoBar();
+      Mix.toast(n ? `${n} produtos com quantidade sugerida (cobertura de ${dias} dias). Revise antes de enviar.` : "Nenhum produto com consumo suficiente para sugerir.", n ? "ok" : "err");
+    };
+  }
+
   function pedidoMeta() {
     const c = state.mix[0] || state.selected;
     const hoje = new Date().toLocaleDateString("pt-BR");
@@ -401,6 +473,7 @@
     const jsPDF = window.jspdf?.jsPDF;
     if (!jsPDF || !jsPDF.API?.autoTable) return exportPedidoPrint(rows, c, hoje, total);
     const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+    if (window.MIX_LOGO) { try { doc.addImage(window.MIX_LOGO, "PNG", 168, 9, 28, 10.2); } catch {} }
     doc.setFontSize(16); doc.setTextColor(122, 31, 43); doc.text("Sugestão de pedido", 14, 16);
     doc.setFontSize(10); doc.setTextColor(40);
     const info = [
@@ -431,6 +504,7 @@
     w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Sugestão de pedido</title>
       <style>body{font-family:Arial,sans-serif;padding:24px;color:#222}h1{color:#7a1f2b;font-size:20px;margin:0 0 8px}p{margin:2px 0;font-size:13px}
       table{border-collapse:collapse;width:100%;margin-top:14px;font-size:12px}th,td{border:1px solid #ccc;padding:5px 7px;text-align:left}th{background:#7a1f2b;color:#fff}td.n,th.n{text-align:right}tfoot td{font-weight:bold;background:#f2f2f2}</style></head><body>
+      ${window.MIX_LOGO ? `<img src="${window.MIX_LOGO}" alt="" style="float:right;height:34px;opacity:.85">` : ""}
       <h1>Sugestão de pedido</h1>
       <p><b>Cliente:</b> ${esc(c.codcli)} - ${esc(c.cliente)}</p>${c.fantasia ? `<p><b>Fantasia:</b> ${esc(c.fantasia)}</p>` : ""}
       <p><b>CNPJ/CPF:</b> ${esc(c.cnpj_cpf || "—")} &nbsp; <b>Cidade:</b> ${esc(c.cidade || "")}${c.uf ? "/" + esc(c.uf) : ""}</p>
