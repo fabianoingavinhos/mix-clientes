@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mix Clientes — Roteiro dos promotores</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="config.js"></script>
+<script src="common.js"></script>
+<style>
+  .rt-toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:14px 0 6px; }
+  .rt-toolbar input[type=date] { padding:8px 10px; border:1px solid var(--border, #ddd); border-radius:8px; font:inherit; }
+  .rt-toolbar select, .rt-toolbar input[type=search] { width:auto; flex:1 1 170px; max-width:280px; }
+  .rt-toolbar input[type=date] { width:auto; }
+  .rt-toolbar .seg { display:flex; border:1px solid var(--border, #ddd); border-radius:8px; overflow:hidden; }
+  .rt-toolbar .seg button { padding:7px 11px; background:#fff; border:0; border-right:1px solid var(--border, #ddd); cursor:pointer; font:inherit; font-size:13px; }
+  .rt-toolbar .seg button:last-child { border-right:0; }
+  .rt-toolbar .seg button.on { background:var(--brand, #7a1f2b); color:#fff; }
+  .rt-group { margin-top:18px; }
+  .rt-group h3 { margin:0 0 6px; font-size:15px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .rt-group h3 .cnt { font-weight:400; font-size:12px; opacity:.7; }
+  td.seq { width:36px; text-align:center; font-weight:700; }
+  td .addr { font-size:12px; opacity:.75; }
+  tr.sem-rota td { opacity:.75; }
+  a.cli-link { color:inherit; text-decoration:none; }
+  a.cli-link:hover { text-decoration:underline; }
+  .dayhead { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-top:8px; }
+  .dayhead b { font-size:17px; }
+  @media (max-width:720px) {
+    .table-wrap.cards td.seq { display:none; }
+    .table-wrap.cards td.loja::before { display:none; }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+(async () => {
+  const { sb, cfg, fmtInt, fmtDate, esc, el, showMsg } = Mix;
+  const ctx = await Mix.requireAuth();
+  const p = ctx.profile;
+  const root = el("root");
+  const isVendedor = p.role === "vendedor";
+
+  const scope = p.role === "admin" ? "Todas as lojas da base"
+    : p.role === "supervisor" ? `Lojas da sua equipe (supervisor ${p.cod_supervisor ?? "—"})`
+    : `Lojas dos seus clientes (vendedor ${p.cod_vendedor ?? "—"})`;
+
+  const DIAS = ["DOMINGO", "SEGUNDA", "TERÇA", "QUARTA", "QUINTA", "SEXTA", "SÁBADO"];
+  const hojeISO = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+  const addDays = (iso, n) => { const d = new Date(iso + "T00:00:00"); d.setDate(d.getDate() + n); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; };
+  const diffDays = (a, b) => Math.round((new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 86400000);
+  const diaSemana = (iso) => DIAS[new Date(iso + "T00:00:00").getDay()];
+
+  let state = { rows: [], modo: "dia", data: hojeISO(), promotor: "", vendedor: "", q: "", semRota: false, sort: null };
+
+  root.innerHTML = Mix.renderTopbar(p, "roteiro") + `
+    <div class="wrap">
+      <div class="card card-pad">
+        <div class="client-head">
+          <div>
+            <h1>Roteiro dos promotores</h1>
+            <p class="sub" style="margin:0">${esc(scope)} · <span id="metaInfo" class="muted"></span></p>
+          </div>
+          <div class="row"><button class="btn ghost sm" id="btnExport">⬇ Exportar Excel</button></div>
+        </div>
+
+        <div class="rt-toolbar">
+          <div class="seg">
+            <button data-modo="dia" class="on">Dia</button>
+            <button data-modo="semana">Semana</button>
+            <button data-modo="todos">Todas as lojas</button>
+          </div>
+          <button class="btn ghost sm" id="btnPrev" title="Dia anterior">◀</button>
+          <input type="date" id="fData">
+          <button class="btn ghost sm" id="btnNext" title="Próximo dia">▶</button>
+          <button class="btn ghost sm" id="btnHoje">Hoje</button>
+          <select id="fPromotor"><option value="">Todos os promotores</option></select>
+          ${isVendedor ? "" : `<select id="fVendedor"><option value="">Todos os vendedores</option></select>`}
+          <input type="search" id="fQ" placeholder="Código, nome, fantasia ou cidade…">
+        </div>
+        <div class="kpis" id="kpis"></div>
+        <div id="lista"></div>
+      </div>
+    </div>`;
+  Mix.bindTopbar();
+  el("fData").value = state.data;
+
+  // ---------- carga ----------
+  async function loadAll() {
+    el("lista").innerHTML = `<div class="empty"><span class="spinner dark"></span></div>`;
+    const all = []; const PAGE = 1000;
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await sb.from("roteiro").select("*").order("id").range(from, from + PAGE - 1);
+      if (error) { el("lista").innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
+      all.push(...(data || []));
+      if (!data || data.length < PAGE) break;
+    }
+    state.rows = all;
+    fillSelects();
+    render();
+    sb.from("acessos").insert({ user_id: p.id, tipo: "roteiro" }).then(() => {}, () => {});
+  }
+
+  async function loadMeta() {
+    const { data } = await sb.from("roteiro_meta").select("*").eq("id", 1).maybeSingle();
+    if (data?.atualizado_em) {
+      const d = new Date(data.atualizado_em);
+      el("metaInfo").textContent = `roteiro atualizado em ${d.toLocaleDateString("pt-BR")} ${d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
+    } else el("metaInfo").textContent = "nenhum roteiro carregado ainda";
+  }
+
+  function fillSelects() {
+    const prom = new Map(), vend = new Map();
+    state.rows.forEach((r) => { if (r.cod_promotor != null) prom.set(r.cod_promotor, r.promotor); if (r.cod_vendedor != null) vend.set(r.cod_vendedor, r.vendedor); });
+    const opt = (m, sel) => [...m.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1]), "pt-BR"))
+      .map(([c, n]) => `<option value="${c}" ${String(sel) === String(c) ? "selected" : ""}>${esc(n || c)} (${c})</option>`).join("");
+    el("fPromotor").innerHTML = `<option value="">Todos os promotores</option>` + opt(prom, state.promotor);
+    if (el("fVendedor")) el("fVendedor").innerHTML = `<option value="">Todos os vendedores</option>` + opt(vend, state.vendedor);
+  }
+
+  // ---------- regra de visita ----------
+  // A planilha traz a PRÓXIMA visita e a periodicidade (7/14/28 dias).
+  // Uma loja é visitada na data D se D = proxima_visita + k * periodicidade (k >= 0).
+  function visitaEm(r, iso) {
+    if (!r.proxima_visita) return false;
+    const d = diffDays(r.proxima_visita, iso);
+    if (d === 0) return true;
+    if (d < 0) return false;
+    const per = r.periodicidade || 0;
+    return per > 0 && d % per === 0;
+  }
+  function proximaAPartir(r, iso) {
+    if (!r.proxima_visita) return null;
+    if (r.proxima_visita >= iso) return r.proxima_visita;
+    const per = r.periodicidade || 0; if (!per) return null;
+    const d = diffDays(r.proxima_visita, iso);
+    return addDays(r.proxima_visita, Math.ceil(d / per) * per);
+  }
+  function visitaSeguinte(r, iso) { // visita depois da que ocorre em iso
+    const per = r.periodicidade || 0; if (!per || !r.proxima_visita) return null;
+    return addDays(iso, per);
+  }
+
+  function filtrar() {
+    const q = state.q.trim().toLowerCase();
+    let rows = state.rows.filter((r) =>
+      (!state.promotor || String(r.cod_promotor) === state.promotor) &&
+      (!state.vendedor || String(r.cod_vendedor) === state.vendedor) &&
+      (!q || String(r.codcli).includes(q) || (r.cliente || "").toLowerCase().includes(q) || (r.fantasia || "").toLowerCase().includes(q) || (r.cidade || "").toLowerCase().includes(q) || (r.cnpj_cpf || "").includes(q)));
+    if (state.modo === "dia") {
+      rows = rows.filter((r) => visitaEm(r, state.data)).map((r) => ({ ...r, _dia: state.data }));
+    } else if (state.modo === "semana") {
+      const out = [];
+      for (let i = 0; i < 7; i++) { const d = addDays(state.data, i); rows.forEach((r) => { if (visitaEm(r, d)) out.push({ ...r, _dia: d }); }); }
+      rows = out;
+    } else {
+      rows = rows.map((r) => ({ ...r, _dia: proximaAPartir(r, hojeISO()) }));
+    }
+    rows.sort((a, b) => (a._dia || "9999").localeCompare(b._dia || "9999") || String(a.promotor || "").localeCompare(String(b.promotor || ""), "pt-BR")
+      || ((a.sequencia_visita ?? 999) - (b.sequencia_visita ?? 999)) || String(a.cliente || "").localeCompare(String(b.cliente || ""), "pt-BR"));
+    return rows;
+  }
+
+  // ---------- render ----------
+  function badgeCompra(r) {
+    const d = r.dias_sem_comprar;
+    if (d == null) return `<span class="badge gray">—</span>`;
+    const cls = d <= 30 ? "ok" : d <= 90 ? "warn" : "bad";
+    return `<span class="badge ${cls}">${d} dias</span>`;
+  }
+  const linkCli = (r, txt) => `<a class="cli-link" href="index.html?cli=${r.codcli}" title="Abrir mix do cliente">${txt}</a>`;
+
+  function render() {
+    const rows = filtrar();
+    const lojas = new Set(rows.map((r) => r.codcli)).size;
+    const proms = new Set(rows.map((r) => r.cod_promotor)).size;
+    const cidades = new Set(rows.map((r) => r.cidade)).size;
+    const semCompra = rows.filter((r) => (r.dias_sem_comprar ?? 0) > 30).length;
+    const semRota = state.rows.filter((r) => !r.proxima_visita).length;
+
+    el("kpis").innerHTML = `
+      <div class="kpi"><div class="l">${state.modo === "dia" ? "Lojas no dia" : state.modo === "semana" ? "Visitas na semana" : "Lojas com rota"}</div><div class="v">${fmtInt.format(state.modo === "todos" ? rows.filter((r) => r.proxima_visita).length : rows.length)}</div><div class="s">${lojas} lojas distintas</div></div>
+      <div class="kpi"><div class="l">Promotores</div><div class="v">${proms}</div><div class="s">${cidades} cidades</div></div>
+      <div class="kpi"><div class="l">Sem comprar há +30 dias</div><div class="v">${semCompra}</div><div class="s">entre as lojas listadas</div></div>
+      ${state.modo === "todos" ? `<div class="kpi"><div class="l">Sem rota definida</div><div class="v">${semRota}</div><div class="s">lojas sem próxima visita</div></div>` : ""}`;
+
+    if (!rows.length) {
+      el("lista").innerHTML = `<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/></svg><div>Nenhuma visita ${state.modo === "dia" ? "em " + fmtDate(state.data) + " (" + diaSemana(state.data).toLowerCase() + ")" : "encontrada"}.</div></div>`;
+      return;
+    }
+
+    // agrupa por dia (semana) e por promotor
+    const groups = new Map();
+    rows.forEach((r) => {
+      const k = (state.modo === "semana" ? r._dia : "") + "|" + (r.promotor || "Sem promotor");
+      if (!groups.has(k)) groups.set(k, { dia: r._dia, promotor: r.promotor || "Sem promotor", cod: r.cod_promotor, rows: [] });
+      groups.get(k).rows.push(r);
+    });
+
+    let html = "", lastDia = null;
+    for (const g of groups.values()) {
+      if (state.modo === "semana" && g.dia !== lastDia) {
+        lastDia = g.dia;
+        html += `<div class="dayhead"><b>${diaSemana(g.dia)}</b><span class="muted">${fmtDate(g.dia)}</span></div>`;
+      }
+      html += `<div class="rt-group">
+        <h3>👤 ${esc(g.promotor)} <span class="cnt">${g.rows.length} ${g.rows.length === 1 ? "loja" : "lojas"}${g.rows[0].supervisor_promotor ? " · " + esc(g.rows[0].supervisor_promotor) : ""}</span></h3>
+        <div class="table-wrap cards"><table>
+          <thead><tr>
+            <th class="num">Seq</th><th>Loja</th><th>Endereço</th>${isVendedor ? "" : "<th>Vendedor</th>"}
+            <th>Visita</th><th>Frequência</th><th>Próxima</th><th>Última compra</th><th>Últ. visita prevista</th>
+          </tr></thead>
+          <tbody>${g.rows.map((r) => `
+            <tr class="${r.proxima_visita ? "" : "sem-rota"}">
+              <td class="num seq" data-l="Seq">${r.sequencia_visita ?? ""}</td>
+              <td class="loja" data-l="Loja"><div class="desc">${linkCli(r, `<b>${esc(r.fantasia || r.cliente)}</b>`)}</div><div class="small">${esc(r.fantasia ? r.cliente : "")} <span class="mono">${r.codcli}</span></div></td>
+              <td data-l="Endereço"><div>${esc(r.cidade || "")}${r.uf ? "/" + esc(r.uf) : ""}</div><div class="addr">${esc([r.endereco, r.numero].filter(Boolean).join(", "))}${r.bairro ? " · " + esc(r.bairro) : ""}</div></td>
+              ${isVendedor ? "" : `<td data-l="Vendedor" class="small">${esc(r.vendedor || "")}</td>`}
+              <td data-l="Visita">${r._dia ? `${fmtDate(r._dia)}<div class="small">${diaSemana(r._dia).toLowerCase()}${r.horario_visita && r.horario_visita !== "00:00" ? " · " + esc(r.horario_visita) : ""}</div>` : `<span class="badge gray">sem rota</span>`}</td>
+              <td data-l="Frequência">${r.periodicidade ? `a cada ${r.periodicidade} dias` : "—"}${r.dia_fixo === "S" ? `<div class="small">dia fixo</div>` : ""}</td>
+              <td data-l="Próxima">${state.modo === "todos" ? (r._dia ? fmtDate(visitaSeguinte(r, r._dia)) : "—") : fmtDate(visitaSeguinte(r, r._dia))}</td>
+              <td data-l="Última compra">${fmtDate(r.ultima_compra)} ${badgeCompra(r)}</td>
+              <td data-l="Últ. visita prevista">${fmtDate(r.ultima_visita_prevista)}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table></div>
+      </div>`;
+    }
+    el("lista").innerHTML = html;
+  }
+
+  // ---------- exportação ----------
+  function exportExcel() {
+    const rows = filtrar(); if (!rows.length) return Mix.toast("Nada para exportar.", "err");
+    const data = rows.map((r) => ({
+      "Data visita": r._dia ? fmtDate(r._dia) : "", "Dia": r._dia ? diaSemana(r._dia) : "", "Promotor": r.promotor, "Seq": r.sequencia_visita ?? "",
+      "Cód. cliente": r.codcli, "Cliente": r.cliente, "Fantasia": r.fantasia, "CNPJ/CPF": r.cnpj_cpf,
+      "Endereço": [r.endereco, r.numero].filter(Boolean).join(", "), "Bairro": r.bairro, "Cidade": r.cidade, "UF": r.uf,
+      ...(isVendedor ? {} : { "Vendedor": r.vendedor, "Supervisor": r.supervisor }),
+      "Periodicidade (dias)": r.periodicidade ?? "", "Próxima visita": r._dia ? fmtDate(visitaSeguinte(r, r._dia)) : "",
+      "Última compra": fmtDate(r.ultima_compra), "Dias sem comprar": r.dias_sem_comprar ?? "", "Última visita prevista": fmtDate(r.ultima_visita_prevista),
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Roteiro");
+    const nome = state.modo === "dia" ? `roteiro_${state.data}` : state.modo === "semana" ? `roteiro_semana_${state.data}` : "roteiro_completo";
+    XLSX.writeFile(wb, nome + ".xlsx");
+  }
+
+  // ---------- eventos ----------
+  document.querySelectorAll(".seg button").forEach((b) => b.addEventListener("click", () => {
+    document.querySelectorAll(".seg button").forEach((x) => x.classList.toggle("on", x === b));
+    state.modo = b.dataset.modo;
+    const dateCtl = state.modo !== "todos";
+    ["fData", "btnPrev", "btnNext", "btnHoje"].forEach((id) => el(id).style.display = dateCtl ? "" : "none");
+    render();
+  }));
+  el("fData").addEventListener("change", (e) => { if (e.target.value) { state.data = e.target.value; render(); } });
+  el("btnPrev").addEventListener("click", () => { state.data = addDays(state.data, state.modo === "semana" ? -7 : -1); el("fData").value = state.data; render(); });
+  el("btnNext").addEventListener("click", () => { state.data = addDays(state.data, state.modo === "semana" ? 7 : 1); el("fData").value = state.data; render(); });
+  el("btnHoje").addEventListener("click", () => { state.data = hojeISO(); el("fData").value = state.data; render(); });
+  el("fPromotor").addEventListener("change", (e) => { state.promotor = e.target.value; render(); });
+  el("fVendedor")?.addEventListener("change", (e) => { state.vendedor = e.target.value; render(); });
+  let t; el("fQ").addEventListener("input", (e) => { clearTimeout(t); t = setTimeout(() => { state.q = e.target.value; render(); }, 200); });
+  el("btnExport").addEventListener("click", exportExcel);
+
+  loadMeta();
+  loadAll();
+})();
+</script>
+</body>
+</html>
+

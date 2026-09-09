@@ -18,10 +18,12 @@ A restrição é feita **no banco de dados** (Row Level Security do Supabase), e
 
 ```
 index.html          → login + consulta do mix
+roteiro.html        → roteiro dos promotores (lojas do dia / semana, próxima visita)
 admin.html          → administração (usuários, senhas, upload)
 config.js           → URL e chave anon do Supabase  ← ÚNICO arquivo a editar
 style.css, common.js → estilos e funções compartilhadas
-schema.sql → script que cria tudo no Supabase
+schema.sql          → script que cria tudo no Supabase
+schema_roteiro.sql  → tabela e permissões do roteiro (executar depois do schema.sql)
 ```
 
 ## Instalação (uma vez só, ~10 min)
@@ -82,3 +84,12 @@ select admin_redefinir_senha((select id from profiles where login = 'admin'), 'n
 **Um vendedor não vê nenhum cliente.** Confira se o `cód. vendedor` do usuário é igual ao `COD_VENDEDOR` da planilha (aba *Equipe na base*).
 
 **Limites do plano gratuito do Supabase.** 500 MB de banco (a planilha atual usa ~30 MB) e o projeto pausa após 7 dias sem uso — basta reativar no painel.
+
+## Roteiro dos promotores
+
+A aba **Roteiro** mostra as lojas que cada promotor visita no dia (ou na semana), com sequência, endereço, frequência, próxima visita e última compra. A permissão é a mesma do mix: vendedor vê as lojas do seu `COD_RCA`, supervisor as do seu `COD_SUPERVISOR`, admin tudo.
+
+1. Execute `schema_roteiro.sql` no SQL Editor do Supabase (uma vez).
+2. **Administração → Planilha do roteiro** → carregue o relatório de promotores x dia de visita (.csv com cabeçalho: COD_SUPERVISOR, COD_RCA, COD_PROMOTOR, CODCLI, DATA_PROXIMA_VISITA, PERIODICIDADE…). O roteiro atual é substituído.
+
+A planilha traz só a **próxima** visita e a periodicidade (7/14/28 dias); as datas seguintes são calculadas (próxima + n × periodicidade), então dá para consultar qualquer dia futuro.

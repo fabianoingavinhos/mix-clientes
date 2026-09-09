@@ -104,7 +104,10 @@
     let t;
     q.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => search(q.value), 250); });
     q.addEventListener("keydown", (e) => { if (e.key === "Enter") { clearTimeout(t); search(q.value); } });
-    search("");
+    // Aberto a partir do roteiro (index.html?cli=CODIGO): busca e abre o cliente
+    const cli = new URLSearchParams(location.search).get("cli");
+    if (cli && /^\d+$/.test(cli)) { q.value = cli; await search(cli); if (state.results.length) selectClient(state.results[0].codcli); }
+    else search("");
   }
 
   // Registro de uso (silencioso): acesso ao sistema e consulta de cliente

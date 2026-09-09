@@ -26,11 +26,13 @@
       <div class="tabs">
         <button class="active" data-tab="users">Usuários</button>
         <button data-tab="upload">Planilha do mix</button>
+        <button data-tab="roteiro">Planilha do roteiro</button>
         <button data-tab="equipe">Equipe na base</button>
         <button data-tab="uso">Uso</button>
       </div>
       <div id="tab-users"></div>
       <div id="tab-upload" hidden></div>
+      <div id="tab-roteiro" hidden></div>
       <div id="tab-equipe" hidden></div>
       <div id="tab-uso" hidden></div>
     </div>`;
@@ -38,7 +40,7 @@
 
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
-    ["users", "upload", "equipe", "uso"].forEach((t) => el("tab-" + t).hidden = t !== b.dataset.tab);
+    ["users", "upload", "roteiro", "equipe", "uso"].forEach((t) => el("tab-" + t).hidden = t !== b.dataset.tab);
     if (b.dataset.tab === "equipe") loadEquipe();
     if (b.dataset.tab === "uso") loadUso();
   }));
@@ -383,6 +385,169 @@
   }
 
   // =====================================================================
+  //  UPLOAD DA PLANILHA DE ROTEIRO (promotores x dia de visita)
+  // =====================================================================
+  // Cabeçalho do relatório -> coluna da tabela "roteiro"
+  const RT_MAP = {
+    cod_supervisor: "cod_supervisor", supervisor: "supervisor", cod_sup_promotor: "cod_sup_promotor", supervisor_promotor: "supervisor_promotor",
+    cod_rca: "cod_vendedor", rca: "vendedor", cod_vendedor: "cod_vendedor", vendedor: "vendedor",
+    cod_promotor: "cod_promotor", promotor: "promotor", codcli: "codcli", cliente: "cliente", fantasia: "fantasia", cnpj_cpf: "cnpj_cpf",
+    endereco: "endereco", numero: "numero", bairro: "bairro", cidade: "cidade", uf: "uf",
+    data_ultima_compra: "ultima_compra", ultima_compra: "ultima_compra", dias_sem_compra: "dias_sem_comprar", dias_sem_comprar: "dias_sem_comprar",
+    dia_semana_cadastrado: "dia_semana_cadastrado", dia_semana: "dia_semana", data_proxima_visita: "proxima_visita", proxima_visita: "proxima_visita",
+    dia_calculado_data: "dia_calculado", horario_visita: "horario_visita", sequencia_visita: "sequencia_visita", periodicidade: "periodicidade",
+    numero_semana: "numero_semana", ciclo_visita: "ciclo_visita", dia_fixo: "dia_fixo", data_inicio_rota: "data_inicio_rota", data_final_rota: "data_final_rota",
+    ultima_visita_prevista: "ultima_visita_prevista", data_referencia: "data_referencia", zona: "zona", observacao: "observacao", qtd_clientes_promotor: "qtd_clientes_promotor",
+  };
+  // Ordem padrão do relatório quando vier sem cabeçalho (39 colunas + coluna vazia final)
+  const RT_ORDER = ["cod_supervisor","supervisor","cod_sup_promotor","supervisor_promotor","cod_rca","rca","cod_promotor","promotor","codcli","cliente","fantasia","cnpj_cpf",
+    "endereco","numero","bairro","cidade","uf","data_ultima_compra","dias_sem_compra","dia_semana_cadastrado","dia_semana","data_proxima_visita","data_visita_formatada",
+    "dia_calculado_data","hora_visita","minuto_visita","horario_visita","sequencia_visita","periodicidade","numero_semana","ciclo_visita","dia_fixo","data_inicio_rota",
+    "data_final_rota","ultima_visita_prevista","data_referencia","zona","observacao","qtd_clientes_promotor"];
+  const RT_INT = new Set(["cod_supervisor","cod_sup_promotor","cod_vendedor","cod_promotor","codcli","dias_sem_comprar","sequencia_visita","periodicidade","numero_semana","qtd_clientes_promotor"]);
+  const RT_DATE = new Set(["ultima_compra","proxima_visita","data_inicio_rota","data_final_rota","ultima_visita_prevista","data_referencia"]);
+
+  let parsedRt = null;
+
+  async function renderRoteiro() {
+    const { data: meta } = await sb.from("roteiro_meta").select("*").eq("id", 1).maybeSingle();
+    el("tab-roteiro").innerHTML = `
+      <div class="card card-pad" style="margin-bottom:16px">
+        <h2>Roteiro atual</h2>
+        ${meta?.atualizado_em
+          ? `<p class="sub" style="margin:0">Última atualização em <b>${new Date(meta.atualizado_em).toLocaleString("pt-BR")}</b> — ${fmtInt.format(meta.linhas)} linhas (${esc(meta.arquivo || "")})</p>`
+          : `<p class="sub" style="margin:0">Nenhum roteiro carregado ainda. <span class="muted">Se aparecer erro ao carregar, execute o arquivo <span class="mono">schema_roteiro.sql</span> no SQL Editor do Supabase.</span></p>`}
+      </div>
+      <div class="card card-pad">
+        <h2>Carregar novo roteiro</h2>
+        <div class="msg info" style="margin:0 0 14px">
+          <b>Origem:</b> relatório de <b>promotores x dia de visita</b> (colunas COD_SUPERVISOR, COD_RCA, COD_PROMOTOR, CODCLI, DATA_PROXIMA_VISITA, PERIODICIDADE…), salvo em <b>.csv</b>. O roteiro atual é <b>substituído</b>.
+        </div>
+        <p class="sub">A permissão segue a mesma regra do mix: vendedor vê as lojas do seu <b>COD_RCA</b>; supervisor vê as lojas do seu <b>COD_SUPERVISOR</b>; admin vê tudo.</p>
+        <div class="dropzone" id="rtDrop">
+          <input type="file" id="rtFile" accept=".xlsx,.xls,.csv" hidden>
+          <div><b>Clique para escolher</b> ou arraste o arquivo aqui</div>
+          <div style="font-size:13px;margin-top:4px">xlsx · xls · csv</div>
+        </div>
+        <div id="rtInfo" style="margin-top:14px"></div>
+        <div class="progress" id="rtProg" hidden><div></div></div>
+        <div id="rtMsg"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn" id="rtImport" disabled>Substituir roteiro pela planilha</button>
+          <span class="muted" id="rtStatus" style="font-size:13px"></span>
+        </div>
+      </div>`;
+
+    const drop = el("rtDrop"), file = el("rtFile");
+    drop.addEventListener("click", () => file.click());
+    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) handleRoteiroFile(e.dataTransfer.files[0]); });
+    file.addEventListener("change", () => file.files[0] && handleRoteiroFile(file.files[0]));
+    el("rtImport").addEventListener("click", importRoteiro);
+  }
+
+  function parseRoteiroRows(raw) {
+    const first = (raw[0] || []).map(normHeader);
+    const hasHeader = first.some((h) => RT_MAP[h]) && isNaN(parseInt(String(raw[0][0]), 10));
+    const idx = {}; // coluna da tabela -> índice no arquivo
+    if (hasHeader) first.forEach((h, i) => { const c = RT_MAP[h]; if (c && idx[c] == null) idx[c] = i; });
+    else {
+      const ncols = (raw[0] || []).length;
+      if (ncols < RT_ORDER.length) throw new Error(`Arquivo sem cabeçalho com ${ncols} colunas — esperado ${RT_ORDER.length} na ordem padrão do relatório, ou uma linha de cabeçalho.`);
+      RT_ORDER.forEach((h, i) => { const c = RT_MAP[h]; if (c && idx[c] == null) idx[c] = i; });
+    }
+    const missing = ["codcli", "cod_vendedor", "cod_promotor"].filter((c) => idx[c] == null);
+    if (missing.length) throw new Error("Colunas obrigatórias não encontradas: " + missing.join(", ").toUpperCase());
+    const found = Object.keys(idx), rows = [];
+    for (let i = hasHeader ? 1 : 0; i < raw.length; i++) {
+      const r = raw[i]; if (!r || r[idx.codcli] == null || r[idx.codcli] === "") continue;
+      const o = {};
+      for (const c of found) {
+        let v = r[idx[c]];
+        if (RT_INT.has(c)) v = toInt(v);
+        else if (RT_DATE.has(c)) v = toDate(v);
+        else { v = v == null ? null : String(v).trim(); if (v === "") v = null; }
+        o[c] = v;
+      }
+      if (o.codcli == null) continue;
+      rows.push(o);
+    }
+    return { rows, found, semCabecalho: !hasHeader };
+  }
+
+  function handleRoteiroFile(f) {
+    parsedRt = null; el("rtImport").disabled = true;
+    showMsg(el("rtMsg"), ""); el("rtInfo").innerHTML = `<span class="spinner dark"></span> Lendo ${esc(f.name)}…`;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const raw = readRaw(f, e.target.result);
+        if (raw.length < 1) throw new Error("Planilha vazia.");
+        const { rows, found, semCabecalho } = parseRoteiroRows(raw);
+        if (!rows.length) throw new Error("Nenhuma linha válida encontrada.");
+        const lojas = new Set(rows.map((r) => r.codcli)).size;
+        const prom = new Set(rows.map((r) => r.cod_promotor)).size;
+        const vend = new Set(rows.map((r) => r.cod_vendedor)).size;
+        const sup = new Set(rows.map((r) => r.cod_supervisor)).size;
+        const comRota = rows.filter((r) => r.proxima_visita).length;
+        const semSup = rows.filter((r) => r.cod_supervisor == null).length;
+        parsedRt = { rows, name: f.name };
+        const ex = rows.find((r) => r.proxima_visita) || rows[0];
+        el("rtInfo").innerHTML = `
+          <div class="kpis" style="margin:0">
+            <div class="kpi"><div class="l">Linhas</div><div class="v">${fmtInt.format(rows.length)}</div><div class="s">${fmtInt.format(comRota)} com próxima visita</div></div>
+            <div class="kpi"><div class="l">Lojas</div><div class="v">${fmtInt.format(lojas)}</div></div>
+            <div class="kpi"><div class="l">Promotores</div><div class="v">${prom}</div></div>
+            <div class="kpi"><div class="l">Vendedores</div><div class="v">${vend}</div><div class="s">${sup} supervisores</div></div>
+          </div>
+          <div class="muted" style="font-size:13px;margin-top:8px">
+            ${semCabecalho ? "Arquivo sem cabeçalho — usada a ordem padrão do relatório. " : ""}Colunas reconhecidas: ${found.length}<br>
+            Conferência: <b>${esc(ex.fantasia || ex.cliente)}</b> · promotor ${esc(ex.promotor || "")} (${ex.cod_promotor}) · vendedor ${esc(ex.vendedor || "")} (${ex.cod_vendedor}) · supervisor ${ex.cod_supervisor ?? "—"} · próxima visita ${ex.proxima_visita || "—"} · a cada ${ex.periodicidade ?? "—"} dias
+          </div>
+          ${semSup ? `<div class="msg err">${semSup} linhas sem COD_SUPERVISOR — essas lojas não aparecerão para supervisores (só para admin e para o vendedor).</div>` : ""}`;
+        el("rtImport").disabled = false;
+      } catch (err) {
+        el("rtInfo").innerHTML = ""; showMsg(el("rtMsg"), err.message, "err");
+      }
+    };
+    reader.readAsArrayBuffer(f);
+  }
+
+  async function importRoteiro() {
+    if (!parsedRt) return;
+    const btn = el("rtImport"); btn.disabled = true;
+    const prog = el("rtProg"), bar = prog.firstElementChild, st = el("rtStatus");
+    prog.hidden = false; bar.style.width = "0%"; showMsg(el("rtMsg"), "");
+    try {
+      st.textContent = "Limpando roteiro atual…";
+      let { error } = await sb.rpc("admin_limpar_roteiro"); if (error) throw error;
+      const rows = parsedRt.rows, BATCH = 500;
+      for (let i = 0; i < rows.length; i += BATCH) {
+        const chunk = rows.slice(i, i + BATCH);
+        let tries = 0;
+        while (true) {
+          const { error } = await sb.from("roteiro").insert(chunk);
+          if (!error) break;
+          if (++tries >= 3) throw error;
+          await new Promise((r) => setTimeout(r, 1200));
+        }
+        const done = Math.min(i + BATCH, rows.length);
+        bar.style.width = Math.round((done / rows.length) * 100) + "%";
+        st.textContent = `Enviando ${fmtInt.format(done)} / ${fmtInt.format(rows.length)} linhas…`;
+      }
+      ({ error } = await sb.rpc("admin_registrar_upload_roteiro", { p_linhas: rows.length, p_arquivo: parsedRt.name })); if (error) throw error;
+      st.textContent = ""; showMsg(el("rtMsg"), `Roteiro atualizado com ${fmtInt.format(rows.length)} linhas.`, "ok");
+      toast("Roteiro importado com sucesso.");
+      parsedRt = null;
+      setTimeout(renderRoteiro, 1500);
+    } catch (err) {
+      st.textContent = ""; showMsg(el("rtMsg"), "Erro: " + err.message + " — o roteiro pode estar incompleto; envie a planilha novamente.", "err");
+      btn.disabled = false;
+    }
+  }
+
+  // =====================================================================
   //  EQUIPE PRESENTE NA BASE
   // =====================================================================
   async function loadEquipe() {
@@ -463,7 +628,7 @@
             <tr>
               <td style="white-space:nowrap">${fmtDT(r.criado_em)}<div class="small muted">${tempoAtras(r.criado_em)}</div></td>
               <td><b>${esc(r.nome)}</b><div class="small muted">${esc(r.login)} · ${esc(ROLE_LABEL[r.role] || r.role)}</div></td>
-              <td>${r.tipo === "consulta" ? `<span class="badge brand">consulta</span>` : `<span class="badge gray">acesso</span>`}</td>
+              <td>${r.tipo === "consulta" ? `<span class="badge brand">consulta</span>` : r.tipo === "roteiro" ? `<span class="badge warn">roteiro</span>` : `<span class="badge gray">acesso</span>`}</td>
               <td>${r.codcli ? `<span class="mono">${r.codcli}</span> ${esc(r.cliente || "")}${r.fantasia ? ` <span class="muted">· ${esc(r.fantasia)}</span>` : ""}` : "—"}</td>
             </tr>`).join("") || `<tr><td colspan="4" class="empty">Nenhum registro ainda.</td></tr>`}
           </tbody>
@@ -491,7 +656,9 @@
 
   await loadUsers();
   renderUpload();
+  renderRoteiro();
 })();
 </script>
 </body>
 </html>
+
