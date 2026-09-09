@@ -28,6 +28,10 @@
   a.cli-link:hover { text-decoration:underline; }
   .dayhead { display:flex; align-items:baseline; gap:10px; flex-wrap:wrap; margin-top:8px; }
   .dayhead b { font-size:17px; }
+  .cob-bar { height:8px; background:#eee; border-radius:4px; overflow:hidden; min-width:90px; }
+  .cob-bar > div { height:100%; background:var(--brand, #7a1f2b); }
+  tr.cob-sel td { background:#fbf3f4; }
+  tr.cob-row { cursor:pointer; }
   @media (max-width:720px) {
     .table-wrap.cards td.seq { display:none; }
     .table-wrap.cards td.loja::before { display:none; }
@@ -55,7 +59,7 @@
   const diffDays = (a, b) => Math.round((new Date(b + "T00:00:00") - new Date(a + "T00:00:00")) / 86400000);
   const diaSemana = (iso) => DIAS[new Date(iso + "T00:00:00").getDay()];
 
-  let state = { rows: [], modo: "dia", data: hojeISO(), promotor: "", vendedor: "", q: "", semRota: false, sort: null };
+  let state = { rows: [], clientes: [], modo: "dia", data: hojeISO(), promotor: "", vendedor: "", q: "", cobFiltro: "nao", cobVend: null };
 
   root.innerHTML = Mix.renderTopbar(p, "roteiro") + `
     <div class="wrap">
@@ -73,6 +77,7 @@
             <button data-modo="dia" class="on">Dia</button>
             <button data-modo="semana">Semana</button>
             <button data-modo="todos">Todas as lojas</button>
+            <button data-modo="cobertura">Cobertura</button>
           </div>
           <button class="btn ghost sm" id="btnPrev" title="Dia anterior">◀</button>
           <input type="date" id="fData">
@@ -80,6 +85,7 @@
           <button class="btn ghost sm" id="btnHoje">Hoje</button>
           <select id="fPromotor"><option value="">Todos os promotores</option></select>
           ${isVendedor ? "" : `<select id="fVendedor"><option value="">Todos os vendedores</option></select>`}
+          <select id="fCob" style="display:none"><option value="nao">Lojas não atendidas</option><option value="sim">Lojas atendidas</option><option value="todas">Todas as lojas cadastradas</option></select>
           <input type="search" id="fQ" placeholder="Código, nome, fantasia ou cidade…">
         </div>
         <div class="kpis" id="kpis"></div>
@@ -100,6 +106,9 @@
       if (!data || data.length < PAGE) break;
     }
     state.rows = all;
+    // Clientes cadastrados (base do mix, já filtrada pela permissão do usuário)
+    const { data: cli } = await sb.rpc("buscar_clientes", { q: "", limite: 100000 });
+    state.clientes = cli || [];
     fillSelects();
     render();
     sb.from("acessos").insert({ user_id: p.id, tipo: "roteiro" }).then(() => {}, () => {});
@@ -116,6 +125,7 @@
   function fillSelects() {
     const prom = new Map(), vend = new Map();
     state.rows.forEach((r) => { if (r.cod_promotor != null) prom.set(r.cod_promotor, r.promotor); if (r.cod_vendedor != null) vend.set(r.cod_vendedor, r.vendedor); });
+    state.clientes.forEach((c) => { if (c.cod_vendedor != null && !vend.has(c.cod_vendedor)) vend.set(c.cod_vendedor, c.vendedor); });
     const opt = (m, sel) => [...m.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1]), "pt-BR"))
       .map(([c, n]) => `<option value="${c}" ${String(sel) === String(c) ? "selected" : ""}>${esc(n || c)} (${c})</option>`).join("");
     el("fPromotor").innerHTML = `<option value="">Todos os promotores</option>` + opt(prom, state.promotor);
@@ -165,6 +175,77 @@
     return rows;
   }
 
+  // ---------- cobertura (cadastradas x atendidas por promotor) ----------
+  function cobertura() {
+    const atend = new Map(); // codcli -> promotores
+    state.rows.forEach((r) => { if (r.proxima_visita) { if (!atend.has(r.codcli)) atend.set(r.codcli, new Set()); atend.get(r.codcli).add(r.promotor || "?"); } });
+    const porVend = new Map();
+    state.clientes.forEach((c) => {
+      const k = c.cod_vendedor ?? 0;
+      if (!porVend.has(k)) porVend.set(k, { cod: k, vendedor: c.vendedor || "Sem vendedor", total: 0, atendidas: 0, lojas: [] });
+      const v = porVend.get(k); v.total++;
+      const ok = atend.has(c.codcli); if (ok) v.atendidas++;
+      v.lojas.push({ ...c, _atendida: ok, _promotores: ok ? [...atend.get(c.codcli)].join(", ") : "" });
+    });
+    return [...porVend.values()].sort((a, b) => String(a.vendedor).localeCompare(String(b.vendedor), "pt-BR"));
+  }
+  function lojasCobertura() {
+    const q = state.q.trim().toLowerCase();
+    return cobertura().filter((v) => (!state.vendedor || String(v.cod) === state.vendedor) && (state.cobVend == null || v.cod === state.cobVend))
+      .flatMap((v) => v.lojas)
+      .filter((c) => (state.cobFiltro === "todas" || (state.cobFiltro === "sim") === c._atendida) &&
+        (!q || String(c.codcli).includes(q) || (c.cliente || "").toLowerCase().includes(q) || (c.fantasia || "").toLowerCase().includes(q) || (c.cidade || "").toLowerCase().includes(q)))
+      .sort((a, b) => String(a.vendedor || "").localeCompare(String(b.vendedor || ""), "pt-BR") || String(a.cliente || "").localeCompare(String(b.cliente || ""), "pt-BR"));
+  }
+  function renderCobertura() {
+    const vends = cobertura().filter((v) => !state.vendedor || String(v.cod) === state.vendedor);
+    const total = vends.reduce((s, v) => s + v.total, 0), atend = vends.reduce((s, v) => s + v.atendidas, 0);
+    const pct = (a, t) => t ? Math.round(a / t * 100) : 0;
+    el("kpis").innerHTML = `
+      <div class="kpi"><div class="l">Lojas cadastradas</div><div class="v">${fmtInt.format(total)}</div><div class="s">${vends.length} ${vends.length === 1 ? "vendedor" : "vendedores"}</div></div>
+      <div class="kpi"><div class="l">Atendidas por promotor</div><div class="v">${fmtInt.format(atend)}</div><div class="s">${pct(atend, total)}% de cobertura</div></div>
+      <div class="kpi"><div class="l">Não atendidas</div><div class="v">${fmtInt.format(total - atend)}</div><div class="s">sem promotor no roteiro</div></div>`;
+    if (!total) { el("lista").innerHTML = `<div class="empty"><div>Nenhum cliente cadastrado na base do mix para este filtro.</div></div>`; return; }
+    const lojas = lojasCobertura();
+    const tituloLista = state.cobFiltro === "nao" ? "Lojas não atendidas" : state.cobFiltro === "sim" ? "Lojas atendidas" : "Todas as lojas cadastradas";
+    el("lista").innerHTML = `
+      ${isVendedor ? "" : `<div class="rt-group">
+        <h3>Cobertura por vendedor <span class="cnt">clique em um vendedor para ver só as lojas dele</span></h3>
+        <div class="table-wrap cards"><table>
+          <thead><tr><th>Vendedor</th><th class="num">Cadastradas</th><th class="num">Atendidas</th><th class="num">Não atendidas</th><th>Cobertura</th></tr></thead>
+          <tbody>${vends.map((v) => `
+            <tr class="cob-row ${state.cobVend === v.cod ? "cob-sel" : ""}" data-cod="${v.cod}">
+              <td data-l="Vendedor"><b>${esc(v.vendedor)}</b> <span class="mono small">${v.cod}</span></td>
+              <td class="num" data-l="Cadastradas">${fmtInt.format(v.total)}</td>
+              <td class="num" data-l="Atendidas">${fmtInt.format(v.atendidas)}</td>
+              <td class="num" data-l="Não atendidas"><b>${fmtInt.format(v.total - v.atendidas)}</b></td>
+              <td data-l="Cobertura"><div class="row" style="gap:8px;align-items:center"><div class="cob-bar"><div style="width:${pct(v.atendidas, v.total)}%"></div></div><span class="badge ${pct(v.atendidas, v.total) >= 70 ? "ok" : pct(v.atendidas, v.total) >= 40 ? "warn" : "bad"}">${pct(v.atendidas, v.total)}%</span></div></td>
+            </tr>`).join("")}
+          </tbody>
+        </table></div>
+      </div>`}
+      <div class="rt-group">
+        <h3>${tituloLista} <span class="cnt">${fmtInt.format(lojas.length)} lojas${state.cobVend != null ? " · " + esc(vends.find((v) => v.cod === state.cobVend)?.vendedor || "") : ""}</span>
+          ${state.cobVend != null ? `<button class="btn ghost sm" id="cobTodos">Todos os vendedores</button>` : ""}</h3>
+        <div class="table-wrap cards"><table>
+          <thead><tr><th>Loja</th><th>Cidade</th>${isVendedor ? "" : "<th>Vendedor</th>"}<th>Situação</th><th>Promotor</th><th>Última compra</th></tr></thead>
+          <tbody>${lojas.slice(0, 1500).map((c) => `
+            <tr>
+              <td class="loja" data-l="Loja"><div class="desc">${linkCli(c, `<b>${esc(c.fantasia || c.cliente)}</b>`)}</div><div class="small">${esc(c.fantasia ? c.cliente : "")} <span class="mono">${c.codcli}</span></div></td>
+              <td data-l="Cidade">${esc(c.cidade || "")}${c.uf ? "/" + esc(c.uf) : ""}</td>
+              ${isVendedor ? "" : `<td data-l="Vendedor" class="small">${esc(c.vendedor || "")}</td>`}
+              <td data-l="Situação">${c._atendida ? `<span class="badge ok">atendida</span>` : `<span class="badge bad">não atendida</span>`}</td>
+              <td data-l="Promotor" class="small">${esc(c._promotores || "—")}</td>
+              <td data-l="Última compra">${fmtDate(c.ultima_compra)}</td>
+            </tr>`).join("") || `<tr><td colspan="6" class="empty">Nenhuma loja neste filtro.</td></tr>`}
+          </tbody>
+        </table></div>
+        ${lojas.length > 1500 ? `<div class="muted" style="font-size:12px;margin-top:6px">Mostrando 1.500 de ${fmtInt.format(lojas.length)} — refine a busca ou exporte para Excel.</div>` : ""}
+      </div>`;
+    el("lista").querySelectorAll("tr.cob-row").forEach((tr) => tr.addEventListener("click", () => { const c = +tr.dataset.cod; state.cobVend = state.cobVend === c ? null : c; render(); }));
+    el("cobTodos")?.addEventListener("click", () => { state.cobVend = null; render(); });
+  }
+
   // ---------- render ----------
   function badgeCompra(r) {
     const d = r.dias_sem_comprar;
@@ -175,6 +256,7 @@
   const linkCli = (r, txt) => `<a class="cli-link" href="index.html?cli=${r.codcli}" title="Abrir mix do cliente">${txt}</a>`;
 
   function render() {
+    if (state.modo === "cobertura") return renderCobertura();
     const rows = filtrar();
     const lojas = new Set(rows.map((r) => r.codcli)).size;
     const proms = new Set(rows.map((r) => r.cod_promotor)).size;
@@ -235,6 +317,13 @@
 
   // ---------- exportação ----------
   function exportExcel() {
+    if (state.modo === "cobertura") {
+      const lojas = lojasCobertura(); if (!lojas.length) return Mix.toast("Nada para exportar.", "err");
+      const wb = XLSX.utils.book_new();
+      if (!isVendedor) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cobertura().map((v) => ({ "Cód. vendedor": v.cod, "Vendedor": v.vendedor, "Cadastradas": v.total, "Atendidas": v.atendidas, "Não atendidas": v.total - v.atendidas, "Cobertura %": v.total ? Math.round(v.atendidas / v.total * 100) : 0 }))), "Cobertura");
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lojas.map((c) => ({ "Cód. cliente": c.codcli, "Cliente": c.cliente, "Fantasia": c.fantasia, "Cidade": c.cidade, "UF": c.uf, ...(isVendedor ? {} : { "Vendedor": c.vendedor, "Supervisor": c.supervisor }), "Situação": c._atendida ? "Atendida" : "Não atendida", "Promotor": c._promotores, "Última compra": fmtDate(c.ultima_compra) }))), "Lojas");
+      return XLSX.writeFile(wb, "cobertura_promotores.xlsx");
+    }
     const rows = filtrar(); if (!rows.length) return Mix.toast("Nada para exportar.", "err");
     const data = rows.map((r) => ({
       "Data visita": r._dia ? fmtDate(r._dia) : "", "Dia": r._dia ? diaSemana(r._dia) : "", "Promotor": r.promotor, "Seq": r.sequencia_visita ?? "",
@@ -255,8 +344,9 @@
   document.querySelectorAll(".seg button").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll(".seg button").forEach((x) => x.classList.toggle("on", x === b));
     state.modo = b.dataset.modo;
-    const dateCtl = state.modo !== "todos";
+    const dateCtl = state.modo === "dia" || state.modo === "semana", cob = state.modo === "cobertura";
     ["fData", "btnPrev", "btnNext", "btnHoje"].forEach((id) => el(id).style.display = dateCtl ? "" : "none");
+    el("fPromotor").style.display = cob ? "none" : ""; el("fCob").style.display = cob ? "" : "none";
     render();
   }));
   el("fData").addEventListener("change", (e) => { if (e.target.value) { state.data = e.target.value; render(); } });
@@ -264,7 +354,8 @@
   el("btnNext").addEventListener("click", () => { state.data = addDays(state.data, state.modo === "semana" ? 7 : 1); el("fData").value = state.data; render(); });
   el("btnHoje").addEventListener("click", () => { state.data = hojeISO(); el("fData").value = state.data; render(); });
   el("fPromotor").addEventListener("change", (e) => { state.promotor = e.target.value; render(); });
-  el("fVendedor")?.addEventListener("change", (e) => { state.vendedor = e.target.value; render(); });
+  el("fCob").addEventListener("change", (e) => { state.cobFiltro = e.target.value; render(); });
+  el("fVendedor")?.addEventListener("change", (e) => { state.vendedor = e.target.value; state.cobVend = null; render(); });
   let t; el("fQ").addEventListener("input", (e) => { clearTimeout(t); t = setTimeout(() => { state.q = e.target.value; render(); }, 200); });
   el("btnExport").addEventListener("click", exportExcel);
 
@@ -274,4 +365,5 @@
 </script>
 </body>
 </html>
+
 
