@@ -26,17 +26,13 @@
       <div class="tabs">
         <button class="active" data-tab="users">Usuários</button>
         <button data-tab="upload">Planilha do mix</button>
-        <button data-tab="roteiro">Planilha do roteiro</button>
-        <button data-tab="rvend">Roteiro vendedor</button>
-        <button data-tab="clientes">Planilha de clientes</button>
+        <button data-tab="rotas">Roteiros e clientes</button>
         <button data-tab="equipe">Equipe na base</button>
         <button data-tab="uso">Uso</button>
       </div>
       <div id="tab-users"></div>
       <div id="tab-upload" hidden></div>
-      <div id="tab-roteiro" hidden></div>
-      <div id="tab-rvend" hidden></div>
-      <div id="tab-clientes" hidden></div>
+      <div id="tab-rotas" hidden></div>
       <div id="tab-equipe" hidden></div>
       <div id="tab-uso" hidden></div>
     </div>`;
@@ -44,7 +40,7 @@
 
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
-    ["users", "upload", "roteiro", "rvend", "clientes", "equipe", "uso"].forEach((t) => el("tab-" + t).hidden = t !== b.dataset.tab);
+    ["users", "upload", "rotas", "equipe", "uso"].forEach((t) => el("tab-" + t).hidden = t !== b.dataset.tab);
     if (b.dataset.tab === "equipe") loadEquipe();
     if (b.dataset.tab === "uso") loadUso();
   }));
@@ -389,7 +385,7 @@
   }
 
   // =====================================================================
-  //  UPLOAD DA PLANILHA DE ROTEIRO (promotores x dia de visita)
+  //  MAPA DO FORMATO DA ROTINA 8236 (promotores x dia de visita) — usado pelo upload único
   // =====================================================================
   // Cabeçalho do relatório -> coluna da tabela "roteiro"
   const RT_MAP = {
@@ -410,46 +406,6 @@
     "data_final_rota","ultima_visita_prevista","data_referencia","zona","observacao","qtd_clientes_promotor"];
   const RT_INT = new Set(["cod_supervisor","cod_sup_promotor","cod_vendedor","cod_promotor","codcli","dias_sem_comprar","sequencia_visita","periodicidade","numero_semana","qtd_clientes_promotor"]);
   const RT_DATE = new Set(["ultima_compra","proxima_visita","data_inicio_rota","data_final_rota","ultima_visita_prevista","data_referencia"]);
-
-  let parsedRt = null;
-
-  async function renderRoteiro() {
-    const { data: meta } = await sb.from("roteiro_meta").select("*").eq("id", 1).maybeSingle();
-    el("tab-roteiro").innerHTML = `
-      <div class="card card-pad" style="margin-bottom:16px">
-        <h2>Roteiro atual</h2>
-        ${meta?.atualizado_em
-          ? `<p class="sub" style="margin:0">Última atualização em <b>${new Date(meta.atualizado_em).toLocaleString("pt-BR")}</b> — ${fmtInt.format(meta.linhas)} linhas (${esc(meta.arquivo || "")})</p>`
-          : `<p class="sub" style="margin:0">Nenhum roteiro carregado ainda. <span class="muted">Se aparecer erro ao carregar, execute o arquivo <span class="mono">schema_roteiro.sql</span> no SQL Editor do Supabase.</span></p>`}
-      </div>
-      <div class="card card-pad">
-        <h2>Carregar novo roteiro</h2>
-        <div class="msg info" style="margin:0 0 14px">
-          <b>Origem do roteiro:</b> gere o relatório na <b>rotina 8236</b> (promotores x dia de visita) e exporte em <b>.csv</b>, com cabeçalho (COD_SUPERVISOR, COD_RCA, COD_PROMOTOR, CODCLI, DATA_PROXIMA_VISITA, PERIODICIDADE…). Depois carregue o arquivo aqui — o roteiro atual é <b>substituído</b> pelo novo.
-        </div>
-        <p class="sub">A permissão segue a mesma regra do mix: vendedor vê as lojas do seu <b>COD_RCA</b>; supervisor vê as lojas do seu <b>COD_SUPERVISOR</b>; admin vê tudo.</p>
-        <div class="dropzone" id="rtDrop">
-          <input type="file" id="rtFile" accept=".xlsx,.xls,.csv" hidden>
-          <div><b>Clique para escolher</b> ou arraste o arquivo aqui</div>
-          <div style="font-size:13px;margin-top:4px">xlsx · xls · csv</div>
-        </div>
-        <div id="rtInfo" style="margin-top:14px"></div>
-        <div class="progress" id="rtProg" hidden><div></div></div>
-        <div id="rtMsg"></div>
-        <div class="row" style="margin-top:10px">
-          <button class="btn" id="rtImport" disabled>Substituir roteiro pela planilha</button>
-          <span class="muted" id="rtStatus" style="font-size:13px"></span>
-        </div>
-      </div>`;
-
-    const drop = el("rtDrop"), file = el("rtFile");
-    drop.addEventListener("click", () => file.click());
-    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
-    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-    drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) handleRoteiroFile(e.dataTransfer.files[0]); });
-    file.addEventListener("change", () => file.files[0] && handleRoteiroFile(file.files[0]));
-    el("rtImport").addEventListener("click", importRoteiro);
-  }
 
   function parseRoteiroRows(raw) {
     const first = (raw[0] || []).map(normHeader);
@@ -480,80 +436,13 @@
     return { rows, found, semCabecalho: !hasHeader };
   }
 
-  function handleRoteiroFile(f) {
-    parsedRt = null; el("rtImport").disabled = true;
-    showMsg(el("rtMsg"), ""); el("rtInfo").innerHTML = `<span class="spinner dark"></span> Lendo ${esc(f.name)}…`;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const raw = readRaw(f, e.target.result);
-        if (raw.length < 1) throw new Error("Planilha vazia.");
-        const { rows, found, semCabecalho } = parseRoteiroRows(raw);
-        if (!rows.length) throw new Error("Nenhuma linha válida encontrada.");
-        const lojas = new Set(rows.map((r) => r.codcli)).size;
-        const prom = new Set(rows.map((r) => r.cod_promotor)).size;
-        const vend = new Set(rows.map((r) => r.cod_vendedor)).size;
-        const sup = new Set(rows.map((r) => r.cod_supervisor)).size;
-        const comRota = rows.filter((r) => r.proxima_visita).length;
-        const semSup = rows.filter((r) => r.cod_supervisor == null).length;
-        parsedRt = { rows, name: f.name };
-        const ex = rows.find((r) => r.proxima_visita) || rows[0];
-        el("rtInfo").innerHTML = `
-          <div class="kpis" style="margin:0">
-            <div class="kpi"><div class="l">Linhas</div><div class="v">${fmtInt.format(rows.length)}</div><div class="s">${fmtInt.format(comRota)} com próxima visita</div></div>
-            <div class="kpi"><div class="l">Lojas</div><div class="v">${fmtInt.format(lojas)}</div></div>
-            <div class="kpi"><div class="l">Promotores</div><div class="v">${prom}</div></div>
-            <div class="kpi"><div class="l">Vendedores</div><div class="v">${vend}</div><div class="s">${sup} supervisores</div></div>
-          </div>
-          <div class="muted" style="font-size:13px;margin-top:8px">
-            ${semCabecalho ? "Arquivo sem cabeçalho — usada a ordem padrão do relatório. " : ""}Colunas reconhecidas: ${found.length}<br>
-            Conferência: <b>${esc(ex.fantasia || ex.cliente)}</b> · promotor ${esc(ex.promotor || "")} (${ex.cod_promotor}) · vendedor ${esc(ex.vendedor || "")} (${ex.cod_vendedor}) · supervisor ${ex.cod_supervisor ?? "—"} · próxima visita ${ex.proxima_visita || "—"} · a cada ${ex.periodicidade ?? "—"} dias
-          </div>
-          ${semSup ? `<div class="msg err">${semSup} linhas sem COD_SUPERVISOR — essas lojas não aparecerão para supervisores (só para admin e para o vendedor).</div>` : ""}`;
-        el("rtImport").disabled = false;
-      } catch (err) {
-        el("rtInfo").innerHTML = ""; showMsg(el("rtMsg"), err.message, "err");
-      }
-    };
-    reader.readAsArrayBuffer(f);
-  }
-
-  async function importRoteiro() {
-    if (!parsedRt) return;
-    const btn = el("rtImport"); btn.disabled = true;
-    const prog = el("rtProg"), bar = prog.firstElementChild, st = el("rtStatus");
-    prog.hidden = false; bar.style.width = "0%"; showMsg(el("rtMsg"), "");
-    try {
-      st.textContent = "Limpando roteiro atual…";
-      let { error } = await sb.rpc("admin_limpar_roteiro"); if (error) throw error;
-      const rows = parsedRt.rows, BATCH = 500;
-      for (let i = 0; i < rows.length; i += BATCH) {
-        const chunk = rows.slice(i, i + BATCH);
-        let tries = 0;
-        while (true) {
-          const { error } = await sb.from("roteiro").insert(chunk);
-          if (!error) break;
-          if (++tries >= 3) throw error;
-          await new Promise((r) => setTimeout(r, 1200));
-        }
-        const done = Math.min(i + BATCH, rows.length);
-        bar.style.width = Math.round((done / rows.length) * 100) + "%";
-        st.textContent = `Enviando ${fmtInt.format(done)} / ${fmtInt.format(rows.length)} linhas…`;
-      }
-      ({ error } = await sb.rpc("admin_registrar_upload_roteiro", { p_linhas: rows.length, p_arquivo: parsedRt.name })); if (error) throw error;
-      st.textContent = ""; showMsg(el("rtMsg"), `Roteiro atualizado com ${fmtInt.format(rows.length)} linhas.`, "ok");
-      toast("Roteiro importado com sucesso.");
-      parsedRt = null;
-      setTimeout(renderRoteiro, 1500);
-    } catch (err) {
-      st.textContent = ""; showMsg(el("rtMsg"), "Erro: " + err.message + " — o roteiro pode estar incompleto; envie a planilha novamente.", "err");
-      btn.disabled = false;
-    }
-  }
-
   // =====================================================================
-  //  UPLOAD DO ROTEIRO DO VENDEDOR (relatório clientes x dia de visita do RCA)
-  //  O mesmo arquivo traz todos os clientes: alimenta roteiro_vendedor E a base de clientes.
+  //  UPLOAD ÚNICO: ROTEIROS (promotor + vendedor) E BASE DE CLIENTES
+  //  Relatório "clientes x dia de visita do RCA" com TODOS os RCAs, inclusive os promotores
+  //  (linhas cujo supervisor é PROMOTORES / RCA começa com PROMOTOR).
+  //  - Linhas de vendedor  -> roteiro_vendedor (as que têm DATA_PROXIMA_VISITA) + base de clientes
+  //  - Linhas de promotor  -> roteiro (promotor); vendedor/supervisor do cliente vêm da linha do vendedor
+  //  Também aceita o formato da rotina 8236 (com COD_PROMOTOR): nesse caso só o roteiro do promotor é substituído.
   // =====================================================================
   const RV_MAP = {
     cod_supervisor: "cod_supervisor", supervisor: "supervisor", cod_rca: "cod_vendedor", rca: "vendedor", cod_vendedor: "cod_vendedor", vendedor: "vendedor",
@@ -571,24 +460,47 @@
     "ultima_visita_prevista","data_referencia","zona","observacao","status_rota","ultima_compra","dias_sem_comprar","status_ultima_compra"];
   const RV_CLI_COLS = ["cod_supervisor","supervisor","cod_vendedor","vendedor","codcli","cliente","fantasia","cnpj_cpf","endereco","numero","bairro","cidade","uf","telefone",
     "ultima_compra","dias_sem_comprar","status_ultima_compra","qtd_clientes_rca","qtd_clientes_supervisor"];
+  // Colunas da tabela "roteiro" (promotor) preenchidas a partir de uma linha de promotor do arquivo único
+  const RT_FROM_RV = ["codcli","cliente","fantasia","cnpj_cpf","endereco","numero","bairro","cidade","uf","ultima_compra","dias_sem_comprar",
+    "dia_semana_cadastrado","dia_semana","proxima_visita","horario_visita","sequencia_visita","periodicidade","numero_semana","ciclo_visita","dia_fixo",
+    "data_inicio_rota","data_final_rota","ultima_visita_prevista","data_referencia","zona","observacao"];
+
+  // Linha de promotor: supervisor "PROMOTORES" (ou nome do RCA começando com PROMOTOR/PROMOTRA)
+  function ehPromotor(o) {
+    const sup = normHeader(o.supervisor || ""), rca = normHeader(o.vendedor || "");
+    return sup.includes("promotor") || rca.startsWith("promot");
+  }
 
   let parsedRv = null;
 
-  async function renderRvend() {
-    const { data: meta } = await sb.from("roteiro_vendedor_meta").select("*").eq("id", 1).maybeSingle();
-    el("tab-rvend").innerHTML = `
+  function metaLine(meta, rotulo, unidade) {
+    return meta?.atualizado_em
+      ? `<div><b>${rotulo}:</b> ${new Date(meta.atualizado_em).toLocaleString("pt-BR")} — ${fmtInt.format(meta.linhas)} ${unidade} <span class="muted">(${esc(meta.arquivo || "")})</span></div>`
+      : `<div><b>${rotulo}:</b> <span class="muted">nada carregado ainda</span></div>`;
+  }
+
+  async function renderRotas() {
+    const [{ data: mp }, { data: mv }, { data: mc }] = await Promise.all([
+      sb.from("roteiro_meta").select("*").eq("id", 1).maybeSingle(),
+      sb.from("roteiro_vendedor_meta").select("*").eq("id", 1).maybeSingle(),
+      sb.from("clientes_meta").select("*").eq("id", 1).maybeSingle(),
+    ]);
+    el("tab-rotas").innerHTML = `
       <div class="card card-pad" style="margin-bottom:16px">
-        <h2>Roteiro do vendedor atual</h2>
-        ${meta?.atualizado_em
-          ? `<p class="sub" style="margin:0">Última atualização em <b>${new Date(meta.atualizado_em).toLocaleString("pt-BR")}</b> — ${fmtInt.format(meta.linhas)} visitas (${esc(meta.arquivo || "")})</p>`
-          : `<p class="sub" style="margin:0">Nenhum roteiro de vendedor carregado ainda. <span class="muted">Se aparecer erro ao carregar, execute <span class="mono">schema_roteiro_vendedor.sql</span> no SQL Editor do Supabase.</span></p>`}
+        <h2>Situação atual</h2>
+        <div class="sub" style="margin:0;display:grid;gap:4px">
+          ${metaLine(mp, "Roteiro promotor", "visitas")}
+          ${metaLine(mv, "Roteiro vendedor", "visitas")}
+          ${metaLine(mc, "Base de clientes", "clientes")}
+        </div>
       </div>
       <div class="card card-pad">
-        <h2>Carregar roteiro do vendedor</h2>
+        <h2>Carregar planilha de roteiros e clientes</h2>
         <div class="msg info" style="margin:0 0 14px">
-          <b>Origem:</b> relatório de <b>clientes x dia de visita do RCA</b>, exportado em <b>.csv</b> com cabeçalho (COD_SUPERVISOR, COD_RCA, CODCLI, DIA_SEMANA, DATA_PROXIMA_VISITA, SEQUENCIA_VISITA, PERIODICIDADE, STATUS_ROTA, DATA_ULTIMA_COMPRA…).
+          <b>Origem:</b> relatório de <b>clientes x dia de visita do RCA</b> com <b>todos os RCAs, inclusive os promotores</b> (supervisor <b>PROMOTORES</b>), exportado em <b>.csv</b> com cabeçalho
+          (COD_SUPERVISOR, SUPERVISOR, COD_RCA, RCA, CODCLI, CLIENTE, DIA_SEMANA, DATA_PROXIMA_VISITA, SEQUENCIA_VISITA, PERIODICIDADE, STATUS_ROTA, DATA_ULTIMA_COMPRA…).
         </div>
-        <p class="sub">Como este relatório traz <b>todos os clientes</b> (com e sem rota), ele também <b>atualiza a base de clientes</b> da aba Clientes — não precisa carregar a planilha de clientes separadamente. Roteiro e base atuais são substituídos.</p>
+        <p class="sub">Um único arquivo alimenta as três bases: <b>Roteiro promotor</b> (linhas cujo supervisor é PROMOTORES), <b>Roteiro vendedor</b> (linhas com data de próxima visita dos demais RCAs) e a <b>base de clientes</b> (todos os clientes). As bases atuais são substituídas. O arquivo da rotina 8236 (com COD_PROMOTOR) também é aceito — nesse caso só o roteiro do promotor é atualizado.</p>
         <div class="dropzone" id="rvDrop">
           <input type="file" id="rvFile" accept=".xlsx,.xls,.csv" hidden>
           <div><b>Clique para escolher</b> ou arraste o arquivo aqui</div>
@@ -598,7 +510,7 @@
         <div class="progress" id="rvProg" hidden><div></div></div>
         <div id="rvMsg"></div>
         <div class="row" style="margin-top:10px">
-          <button class="btn" id="rvImport" disabled>Substituir roteiro do vendedor e base de clientes</button>
+          <button class="btn" id="rvImport" disabled>Substituir roteiros e base de clientes</button>
           <span class="muted" id="rvStatus" style="font-size:13px"></span>
         </div>
       </div>`;
@@ -614,12 +526,12 @@
   function parseRvRows(raw) {
     const first = (raw[0] || []).map(normHeader);
     const hasHeader = first.some((h) => RV_MAP[h]) && isNaN(parseInt(String(raw[0][0]), 10));
-    if (!hasHeader) throw new Error("O relatório do roteiro do vendedor precisa vir com a linha de cabeçalho (COD_SUPERVISOR; COD_RCA; CODCLI; …).");
+    if (!hasHeader) throw new Error("A planilha precisa vir com a linha de cabeçalho (COD_SUPERVISOR; SUPERVISOR; COD_RCA; RCA; CODCLI; …).");
     const idx = {};
     first.forEach((h, i) => { const c = RV_MAP[h]; if (c && idx[c] == null) idx[c] = i; });
     const missing = ["codcli", "cliente", "cod_vendedor", "cod_supervisor", "proxima_visita"].filter((c) => idx[c] == null);
     if (missing.length) throw new Error("Colunas obrigatórias não encontradas: " + missing.join(", ").toUpperCase());
-    const found = Object.keys(idx), rotas = [], clientes = [], seen = new Set();
+    const found = Object.keys(idx), linhas = [];
     for (let i = 1; i < raw.length; i++) {
       const r = raw[i]; if (!r || r[idx.codcli] == null || r[idx.codcli] === "") continue;
       const o = {};
@@ -630,11 +542,31 @@
         else { v = v == null ? null : String(v).trim(); if (v === "") v = null; }
         o[c] = v;
       }
-      if (o.codcli == null) continue;
-      if (o.proxima_visita) { const rt = {}; RV_ROTA_COLS.forEach((c) => { if (c in o) rt[c] = o[c]; }); rotas.push(rt); }
-      if (!seen.has(o.codcli)) { seen.add(o.codcli); const cl = {}; RV_CLI_COLS.forEach((c) => { if (c in o) cl[c] = o[c]; }); clientes.push(cl); }
+      if (o.codcli != null) linhas.push(o);
     }
-    return { rotas, clientes, found };
+    // separa vendedores x promotores
+    const vendRows = linhas.filter((o) => !ehPromotor(o)), promRows = linhas.filter(ehPromotor);
+    const rotas = [], clientes = [], seen = new Set(), cliMap = new Map();
+    for (const o of vendRows) {
+      if (o.proxima_visita) { const rt = {}; RV_ROTA_COLS.forEach((c) => { if (c in o) rt[c] = o[c]; }); rotas.push(rt); }
+      if (!seen.has(o.codcli)) { seen.add(o.codcli); const cl = {}; RV_CLI_COLS.forEach((c) => { if (c in o) cl[c] = o[c]; }); clientes.push(cl); cliMap.set(o.codcli, cl); }
+    }
+    // roteiro do promotor: vendedor/supervisor do cliente vêm da linha do vendedor
+    const qtdProm = new Map();
+    promRows.forEach((o) => qtdProm.set(o.cod_vendedor, (qtdProm.get(o.cod_vendedor) || 0) + 1));
+    const promotor = [];
+    let promSemVend = 0;
+    for (const o of promRows) {
+      if (!o.proxima_visita) continue;
+      const cl = cliMap.get(o.codcli);
+      if (!cl) promSemVend++;
+      const rt = { cod_promotor: o.cod_vendedor, promotor: o.vendedor, cod_sup_promotor: o.cod_supervisor, supervisor_promotor: o.supervisor,
+        cod_vendedor: cl?.cod_vendedor ?? null, vendedor: cl?.vendedor ?? null, cod_supervisor: cl?.cod_supervisor ?? null, supervisor: cl?.supervisor ?? null,
+        qtd_clientes_promotor: qtdProm.get(o.cod_vendedor) || null };
+      RT_FROM_RV.forEach((c) => { if (c in o) rt[c] = o[c]; });
+      promotor.push(rt);
+    }
+    return { rotas, clientes, promotor, promSemVend, found };
   }
 
   function handleRvFile(f) {
@@ -645,19 +577,41 @@
       try {
         const raw = readRaw(f, e.target.result);
         if (raw.length < 2) throw new Error("Planilha vazia.");
-        const { rotas, clientes, found } = parseRvRows(raw);
+        const header = (raw[0] || []).map(normHeader);
+        if (header.includes("cod_promotor")) {
+          // Formato da rotina 8236: só o roteiro do promotor
+          const { rows, found } = parseRoteiroRows(raw);
+          if (!rows.length) throw new Error("Nenhuma linha válida encontrada.");
+          parsedRv = { modo: "8236", promotor: rows, name: f.name };
+          const ex = rows.find((r) => r.proxima_visita) || rows[0];
+          el("rvInfo").innerHTML = `
+            <div class="msg warn" style="margin:0 0 10px">Arquivo no formato da <b>rotina 8236</b> (com COD_PROMOTOR): será atualizado <b>apenas o roteiro do promotor</b>. Roteiro do vendedor e base de clientes ficam como estão.</div>
+            <div class="kpis" style="margin:0">
+              <div class="kpi"><div class="l">Linhas</div><div class="v">${fmtInt.format(rows.length)}</div><div class="s">${fmtInt.format(rows.filter((r) => r.proxima_visita).length)} com próxima visita</div></div>
+              <div class="kpi"><div class="l">Lojas</div><div class="v">${fmtInt.format(new Set(rows.map((r) => r.codcli)).size)}</div></div>
+              <div class="kpi"><div class="l">Promotores</div><div class="v">${new Set(rows.map((r) => r.cod_promotor)).size}</div></div>
+            </div>
+            <div class="muted" style="font-size:13px;margin-top:8px">Colunas reconhecidas: ${found.length}<br>Conferência: <b>${esc(ex.fantasia || ex.cliente)}</b> · promotor ${esc(ex.promotor || "")} (${ex.cod_promotor}) · vendedor ${esc(ex.vendedor || "")} (${ex.cod_vendedor}) · próxima visita ${ex.proxima_visita || "—"}</div>`;
+          el("rvImport").disabled = false;
+          return;
+        }
+        const { rotas, clientes, promotor, promSemVend, found } = parseRvRows(raw);
         if (!clientes.length) throw new Error("Nenhuma linha válida encontrada.");
-        parsedRv = { rotas, clientes, name: f.name };
+        parsedRv = { modo: "unico", rotas, clientes, promotor, name: f.name };
         const vend = new Set(clientes.map((r) => r.cod_vendedor)).size, comRota = new Set(rotas.map((r) => r.codcli)).size;
-        const ex = rotas[0] || clientes[0];
+        const proms = new Set(promotor.map((r) => r.cod_promotor)).size, lojasProm = new Set(promotor.map((r) => r.codcli)).size;
+        const ex = rotas[0] || clientes[0], exp = promotor[0];
         el("rvInfo").innerHTML = `
           <div class="kpis" style="margin:0">
             <div class="kpi"><div class="l">Clientes</div><div class="v">${fmtInt.format(clientes.length)}</div><div class="s">${vend} vendedores</div></div>
-            <div class="kpi"><div class="l">Com rota do vendedor</div><div class="v">${fmtInt.format(comRota)}</div><div class="s">${fmtInt.format(rotas.length)} visitas programadas</div></div>
-            <div class="kpi"><div class="l">Sem rota</div><div class="v">${fmtInt.format(clientes.length - comRota)}</div></div>
+            <div class="kpi"><div class="l">Roteiro vendedor</div><div class="v">${fmtInt.format(comRota)}</div><div class="s">lojas com rota · ${fmtInt.format(rotas.length)} visitas</div></div>
+            <div class="kpi"><div class="l">Roteiro promotor</div><div class="v">${fmtInt.format(lojasProm)}</div><div class="s">lojas · ${proms} promotores · ${fmtInt.format(promotor.length)} visitas</div></div>
           </div>
           <div class="muted" style="font-size:13px;margin-top:8px">Colunas reconhecidas: ${found.length}<br>
-            Conferência: <b>${esc(ex.fantasia || ex.cliente)}</b> · vendedor ${esc(ex.vendedor || "")} (${ex.cod_vendedor}) · ${ex.dia_semana ? esc(ex.dia_semana) + " · próxima visita " + (ex.proxima_visita || "—") + " · a cada " + (ex.periodicidade ?? "—") + " dias" : "sem rota"}</div>`;
+            Vendedor: <b>${esc(ex.fantasia || ex.cliente)}</b> · ${esc(ex.vendedor || "")} (${ex.cod_vendedor}) · ${ex.dia_semana ? esc(ex.dia_semana) + " · próxima visita " + (ex.proxima_visita || "—") + " · a cada " + (ex.periodicidade ?? "—") + " dias" : "sem rota"}
+            ${exp ? `<br>Promotor: <b>${esc(exp.fantasia || exp.cliente)}</b> · ${esc(exp.promotor || "")} (${exp.cod_promotor}) · vendedor ${esc(exp.vendedor || "—")} · ${esc(exp.dia_semana || "")} · próxima visita ${exp.proxima_visita || "—"} · a cada ${exp.periodicidade ?? "—"} dias` : ""}</div>
+          ${!promotor.length ? `<div class="msg warn" style="margin-top:10px">Nenhuma linha de promotor encontrada (supervisor PROMOTORES). O <b>roteiro do promotor atual será mantido</b>; se quiser atualizá-lo, gere o relatório incluindo os promotores.</div>` : ""}
+          ${promSemVend ? `<div class="msg warn" style="margin-top:10px">${fmtInt.format(promSemVend)} visitas de promotor em lojas que não têm vendedor no arquivo — ficam visíveis só para o admin.</div>` : ""}`;
         el("rvImport").disabled = false;
       } catch (err) {
         el("rvInfo").innerHTML = ""; showMsg(el("rvMsg"), err.message, "err");
@@ -687,168 +641,34 @@
     const btn = el("rvImport"); btn.disabled = true;
     const prog = el("rvProg"), bar = prog.firstElementChild, st = el("rvStatus");
     prog.hidden = false; bar.style.width = "0%"; showMsg(el("rvMsg"), "");
+    const p = parsedRv, partes = [];
     try {
-      st.textContent = "Limpando roteiro do vendedor…";
-      let { error } = await sb.rpc("admin_limpar_roteiro_vendedor"); if (error) throw error;
-      await enviarLotes("roteiro_vendedor", parsedRv.rotas, bar, st, "visitas");
-      ({ error } = await sb.rpc("admin_registrar_upload_roteiro_vendedor", { p_linhas: parsedRv.rotas.length, p_arquivo: parsedRv.name })); if (error) throw error;
-      st.textContent = "Limpando base de clientes…";
-      ({ error } = await sb.rpc("admin_limpar_clientes")); if (error) throw error;
-      await enviarLotes("clientes", parsedRv.clientes, bar, st, "clientes");
-      ({ error } = await sb.rpc("admin_registrar_upload_clientes", { p_linhas: parsedRv.clientes.length, p_arquivo: parsedRv.name })); if (error) throw error;
-      st.textContent = ""; showMsg(el("rvMsg"), `Roteiro do vendedor (${fmtInt.format(parsedRv.rotas.length)} visitas) e base de clientes (${fmtInt.format(parsedRv.clientes.length)}) atualizados.`, "ok");
-      toast("Roteiro do vendedor importado.");
+      let error;
+      if (p.modo === "8236" || p.promotor.length) {
+        st.textContent = "Limpando roteiro do promotor…";
+        ({ error } = await sb.rpc("admin_limpar_roteiro")); if (error) throw error;
+        await enviarLotes("roteiro", p.promotor, bar, st, "roteiro promotor");
+        ({ error } = await sb.rpc("admin_registrar_upload_roteiro", { p_linhas: p.promotor.length, p_arquivo: p.name })); if (error) throw error;
+        partes.push(`roteiro promotor (${fmtInt.format(p.promotor.length)} visitas)`);
+      }
+      if (p.modo === "unico") {
+        st.textContent = "Limpando roteiro do vendedor…";
+        ({ error } = await sb.rpc("admin_limpar_roteiro_vendedor")); if (error) throw error;
+        await enviarLotes("roteiro_vendedor", p.rotas, bar, st, "roteiro vendedor");
+        ({ error } = await sb.rpc("admin_registrar_upload_roteiro_vendedor", { p_linhas: p.rotas.length, p_arquivo: p.name })); if (error) throw error;
+        partes.push(`roteiro vendedor (${fmtInt.format(p.rotas.length)} visitas)`);
+        st.textContent = "Limpando base de clientes…";
+        ({ error } = await sb.rpc("admin_limpar_clientes")); if (error) throw error;
+        await enviarLotes("clientes", p.clientes, bar, st, "clientes");
+        ({ error } = await sb.rpc("admin_registrar_upload_clientes", { p_linhas: p.clientes.length, p_arquivo: p.name })); if (error) throw error;
+        partes.push(`base de clientes (${fmtInt.format(p.clientes.length)})`);
+      }
+      st.textContent = ""; showMsg(el("rvMsg"), "Atualizado: " + partes.join(" · ") + ".", "ok");
+      toast("Planilha importada.");
       parsedRv = null;
-      setTimeout(renderRvend, 1500);
+      setTimeout(renderRotas, 1500);
     } catch (err) {
       st.textContent = ""; showMsg(el("rvMsg"), "Erro: " + err.message + " — envie a planilha novamente.", "err");
-      btn.disabled = false;
-    }
-  }
-
-  // =====================================================================
-  //  UPLOAD DA PLANILHA DE CLIENTES (base cadastral)
-  // =====================================================================
-  const CL_MAP = {
-    cod_supervisor: "cod_supervisor", supervisor: "supervisor", cod_rca: "cod_vendedor", rca: "vendedor", cod_vendedor: "cod_vendedor", vendedor: "vendedor",
-    codcli: "codcli", cliente: "cliente", fantasia: "fantasia", cnpj_cpf: "cnpj_cpf", endereco: "endereco", numero: "numero", bairro: "bairro", cidade: "cidade", uf: "uf",
-    telefone: "telefone", data_ultima_compra: "ultima_compra", ultima_compra: "ultima_compra", dias_sem_compra: "dias_sem_comprar", dias_sem_comprar: "dias_sem_comprar",
-    status_ultima_compra: "status_ultima_compra", qtd_clientes_rca: "qtd_clientes_rca", qtd_clientes_supervisor: "qtd_clientes_supervisor",
-  };
-  const CL_ORDER = ["cod_supervisor","supervisor","cod_rca","rca","codcli","cliente","fantasia","cnpj_cpf","endereco","numero","bairro","cidade","uf","telefone",
-    "data_ultima_compra","dias_sem_compra","status_ultima_compra","qtd_clientes_rca","qtd_clientes_supervisor"];
-  const CL_INT = new Set(["cod_supervisor","cod_vendedor","codcli","dias_sem_comprar","qtd_clientes_rca","qtd_clientes_supervisor"]);
-  const CL_DATE = new Set(["ultima_compra"]);
-
-  let parsedCl = null;
-
-  async function renderClientes() {
-    const { data: meta } = await sb.from("clientes_meta").select("*").eq("id", 1).maybeSingle();
-    el("tab-clientes").innerHTML = `
-      <div class="card card-pad" style="margin-bottom:16px">
-        <h2>Base de clientes atual</h2>
-        ${meta?.atualizado_em
-          ? `<p class="sub" style="margin:0">Última atualização em <b>${new Date(meta.atualizado_em).toLocaleString("pt-BR")}</b> — ${fmtInt.format(meta.linhas)} clientes (${esc(meta.arquivo || "")})</p>`
-          : `<p class="sub" style="margin:0">Nenhuma base de clientes carregada ainda. <span class="muted">Se aparecer erro ao carregar, execute o arquivo <span class="mono">schema_clientes.sql</span> no SQL Editor do Supabase.</span></p>`}
-      </div>
-      <div class="card card-pad">
-        <h2>Carregar nova base de clientes</h2>
-        <div class="msg info" style="margin:0 0 14px">
-          <b>Origem:</b> relatório de <b>clientes</b> exportado em <b>.csv</b> com cabeçalho (COD_SUPERVISOR, COD_RCA, CODCLI, CLIENTE, FANTASIA, TELEFONE, DATA_ULTIMA_COMPRA, STATUS_ULTIMA_COMPRA…). Um cliente por linha; a base atual é <b>substituída</b>.
-        </div>
-        <p class="sub">Alimenta a aba <b>Clientes</b> (com venda × sem venda × atendimento de promotor) e a visão de <b>Cobertura</b> do roteiro. Mesma permissão do mix: vendedor vê os clientes do seu COD_RCA; supervisor os do seu COD_SUPERVISOR.</p>
-        <div class="dropzone" id="clDrop">
-          <input type="file" id="clFile" accept=".xlsx,.xls,.csv" hidden>
-          <div><b>Clique para escolher</b> ou arraste o arquivo aqui</div>
-          <div style="font-size:13px;margin-top:4px">xlsx · xls · csv</div>
-        </div>
-        <div id="clInfo" style="margin-top:14px"></div>
-        <div class="progress" id="clProg" hidden><div></div></div>
-        <div id="clMsg"></div>
-        <div class="row" style="margin-top:10px">
-          <button class="btn" id="clImport" disabled>Substituir base de clientes</button>
-          <span class="muted" id="clStatus" style="font-size:13px"></span>
-        </div>
-      </div>`;
-    const drop = el("clDrop"), file = el("clFile");
-    drop.addEventListener("click", () => file.click());
-    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
-    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
-    drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) handleClientesFile(e.dataTransfer.files[0]); });
-    file.addEventListener("change", () => file.files[0] && handleClientesFile(file.files[0]));
-    el("clImport").addEventListener("click", importClientes);
-  }
-
-  function parseClientesRows(raw) {
-    const first = (raw[0] || []).map(normHeader);
-    const hasHeader = first.some((h) => CL_MAP[h]) && isNaN(parseInt(String(raw[0][0]), 10));
-    const idx = {};
-    if (hasHeader) first.forEach((h, i) => { const c = CL_MAP[h]; if (c && idx[c] == null) idx[c] = i; });
-    else {
-      const ncols = (raw[0] || []).length;
-      if (ncols < CL_ORDER.length) throw new Error(`Arquivo sem cabeçalho com ${ncols} colunas — esperado ${CL_ORDER.length} na ordem padrão, ou uma linha de cabeçalho.`);
-      CL_ORDER.forEach((h, i) => { const c = CL_MAP[h]; if (c && idx[c] == null) idx[c] = i; });
-    }
-    const missing = ["codcli", "cliente", "cod_vendedor", "cod_supervisor"].filter((c) => idx[c] == null);
-    if (missing.length) throw new Error("Colunas obrigatórias não encontradas: " + missing.join(", ").toUpperCase());
-    const found = Object.keys(idx), rows = [], seen = new Set();
-    for (let i = hasHeader ? 1 : 0; i < raw.length; i++) {
-      const r = raw[i]; if (!r || r[idx.codcli] == null || r[idx.codcli] === "") continue;
-      const o = {};
-      for (const c of found) {
-        let v = r[idx[c]];
-        if (CL_INT.has(c)) v = toInt(v);
-        else if (CL_DATE.has(c)) v = toDate(v);
-        else { v = v == null ? null : String(v).trim(); if (v === "") v = null; }
-        o[c] = v;
-      }
-      if (o.codcli == null || seen.has(o.codcli)) continue; // um cliente por linha
-      seen.add(o.codcli); rows.push(o);
-    }
-    return { rows, found, semCabecalho: !hasHeader };
-  }
-
-  function handleClientesFile(f) {
-    parsedCl = null; el("clImport").disabled = true;
-    showMsg(el("clMsg"), ""); el("clInfo").innerHTML = `<span class="spinner dark"></span> Lendo ${esc(f.name)}…`;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      try {
-        const raw = readRaw(f, e.target.result);
-        if (raw.length < 1) throw new Error("Planilha vazia.");
-        const { rows, found, semCabecalho } = parseClientesRows(raw);
-        if (!rows.length) throw new Error("Nenhuma linha válida encontrada.");
-        const vend = new Set(rows.map((r) => r.cod_vendedor)).size, sup = new Set(rows.map((r) => r.cod_supervisor)).size;
-        const nunca = rows.filter((r) => !r.ultima_compra).length;
-        parsedCl = { rows, name: f.name };
-        const ex = rows[0];
-        el("clInfo").innerHTML = `
-          <div class="kpis" style="margin:0">
-            <div class="kpi"><div class="l">Clientes</div><div class="v">${fmtInt.format(rows.length)}</div><div class="s">${fmtInt.format(nunca)} nunca compraram</div></div>
-            <div class="kpi"><div class="l">Vendedores</div><div class="v">${vend}</div></div>
-            <div class="kpi"><div class="l">Supervisores</div><div class="v">${sup}</div></div>
-          </div>
-          <div class="muted" style="font-size:13px;margin-top:8px">
-            ${semCabecalho ? "Arquivo sem cabeçalho — usada a ordem padrão. " : ""}Colunas reconhecidas: ${found.length}<br>
-            Conferência: <b>${esc(ex.fantasia || ex.cliente)}</b> · vendedor ${esc(ex.vendedor || "")} (${ex.cod_vendedor}) · supervisor ${ex.cod_supervisor ?? "—"} · última compra ${ex.ultima_compra || "—"} · ${esc(ex.status_ultima_compra || "")}
-          </div>`;
-        el("clImport").disabled = false;
-      } catch (err) {
-        el("clInfo").innerHTML = ""; showMsg(el("clMsg"), err.message, "err");
-      }
-    };
-    reader.readAsArrayBuffer(f);
-  }
-
-  async function importClientes() {
-    if (!parsedCl) return;
-    const btn = el("clImport"); btn.disabled = true;
-    const prog = el("clProg"), bar = prog.firstElementChild, st = el("clStatus");
-    prog.hidden = false; bar.style.width = "0%"; showMsg(el("clMsg"), "");
-    try {
-      st.textContent = "Limpando base atual…";
-      let { error } = await sb.rpc("admin_limpar_clientes"); if (error) throw error;
-      const rows = parsedCl.rows, BATCH = 500;
-      for (let i = 0; i < rows.length; i += BATCH) {
-        const chunk = rows.slice(i, i + BATCH);
-        let tries = 0;
-        while (true) {
-          const { error } = await sb.from("clientes").insert(chunk);
-          if (!error) break;
-          if (++tries >= 3) throw error;
-          await new Promise((r) => setTimeout(r, 1200));
-        }
-        const done = Math.min(i + BATCH, rows.length);
-        bar.style.width = Math.round((done / rows.length) * 100) + "%";
-        st.textContent = `Enviando ${fmtInt.format(done)} / ${fmtInt.format(rows.length)} clientes…`;
-      }
-      ({ error } = await sb.rpc("admin_registrar_upload_clientes", { p_linhas: rows.length, p_arquivo: parsedCl.name })); if (error) throw error;
-      st.textContent = ""; showMsg(el("clMsg"), `Base de clientes atualizada com ${fmtInt.format(rows.length)} clientes.`, "ok");
-      toast("Clientes importados com sucesso.");
-      parsedCl = null;
-      setTimeout(renderClientes, 1500);
-    } catch (err) {
-      st.textContent = ""; showMsg(el("clMsg"), "Erro: " + err.message + " — a base pode estar incompleta; envie a planilha novamente.", "err");
       btn.disabled = false;
     }
   }
@@ -966,9 +786,7 @@
 
   await loadUsers();
   renderUpload();
-  renderRoteiro();
-  renderRvend();
-  renderClientes();
+  renderRotas();
 })();
 </script>
 </body>
