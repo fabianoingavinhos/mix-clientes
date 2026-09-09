@@ -78,6 +78,7 @@
     const nav = [
       `<a href="index.html" class="${active === "app" ? "active" : ""}">Consulta mix</a>`,
       `<a href="roteiro.html" class="${active === "roteiro" ? "active" : ""}">Roteiro promotor</a>`,
+      `<a href="roteiro.html?tipo=vendedor" class="${active === "roteiro_vendedor" ? "active" : ""}">Roteiro vendedor</a>`,
       `<a href="clientes.html" class="${active === "clientes" ? "active" : ""}">Clientes</a>`,
       profile.role === "admin" ? `<a href="admin.html" class="${active === "admin" ? "active" : ""}">Administração</a>` : "",
     ].join("");

@@ -48,6 +48,11 @@
   const p = ctx.profile;
   const root = el("root");
   const isVendedor = p.role === "vendedor";
+  // ?tipo=vendedor -> roteiro do vendedor (tabela roteiro_vendedor, agrupado por vendedor); padrão: promotor
+  const TIPO = new URLSearchParams(location.search).get("tipo") === "vendedor" ? "vendedor" : "promotor";
+  const VEND = TIPO === "vendedor";
+  const TABELA = VEND ? "roteiro_vendedor" : "roteiro";
+  document.title = VEND ? "Mix Clientes — Roteiro vendedor" : "Mix Clientes — Roteiro promotor";
   const restrito = Mix.protegerDados(p); // vendedor: sem exportar, listas paginadas
   const PAGE_MAX = restrito ? 25 : 1500;
 
@@ -63,12 +68,12 @@
 
   let state = { rows: [], clientes: [], modo: "dia", data: hojeISO(), promotor: "", vendedor: "", q: "", cobFiltro: "nao", cobVend: null };
 
-  root.innerHTML = Mix.renderTopbar(p, "roteiro") + `
+  root.innerHTML = Mix.renderTopbar(p, VEND ? "roteiro_vendedor" : "roteiro") + `
     <div class="wrap">
       <div class="card card-pad">
         <div class="client-head">
           <div>
-            <h1>Roteiro promotor</h1>
+            <h1>${VEND ? "Roteiro vendedor" : "Roteiro promotor"}</h1>
             <p class="sub" style="margin:0">${esc(scope)} · <span id="metaInfo" class="muted"></span></p>
           </div>
           <div class="row">${restrito ? "" : `<button class="btn ghost sm" id="btnExport">⬇ Exportar Excel</button>`}</div>
@@ -79,13 +84,13 @@
             <button data-modo="dia" class="on">Dia</button>
             <button data-modo="semana">Semana</button>
             <button data-modo="todos">Todas as lojas</button>
-            <button data-modo="cobertura">Cobertura</button>
+            ${VEND ? "" : `<button data-modo="cobertura">Cobertura</button>`}
           </div>
           <button class="btn ghost sm" id="btnPrev" title="Dia anterior">◀</button>
           <input type="date" id="fData">
           <button class="btn ghost sm" id="btnNext" title="Próximo dia">▶</button>
           <button class="btn ghost sm" id="btnHoje">Hoje</button>
-          <select id="fPromotor"><option value="">Todos os promotores</option></select>
+          <select id="fPromotor" ${VEND ? 'style="display:none"' : ""}><option value="">Todos os promotores</option></select>
           ${isVendedor ? "" : `<select id="fVendedor"><option value="">Todos os vendedores</option></select>`}
           <select id="fCob" style="display:none"><option value="nao">Lojas não atendidas</option><option value="sim">Lojas atendidas</option><option value="todas">Todas as lojas cadastradas</option></select>
           <input type="search" id="fQ" placeholder="Código, nome, fantasia ou cidade…">
@@ -103,7 +108,7 @@
     el("lista").innerHTML = `<div class="empty"><span class="spinner dark"></span></div>`;
     const all = []; const PAGE = 1000;
     for (let from = 0; ; from += PAGE) {
-      const { data, error } = await sb.from("roteiro").select("*").order("id").range(from, from + PAGE - 1);
+      const { data, error } = await sb.from(TABELA).select("*").order("id").range(from, from + PAGE - 1);
       if (error) { el("lista").innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
       all.push(...(data || []));
       if (!data || data.length < PAGE) break;
@@ -125,7 +130,7 @@
   }
 
   async function loadMeta() {
-    const { data } = await sb.from("roteiro_meta").select("*").eq("id", 1).maybeSingle();
+    const { data } = await sb.from(VEND ? "roteiro_vendedor_meta" : "roteiro_meta").select("*").eq("id", 1).maybeSingle();
     if (data?.atualizado_em) {
       const d = new Date(data.atualizado_em);
       el("metaInfo").textContent = `roteiro atualizado em ${d.toLocaleDateString("pt-BR")} ${d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
@@ -180,7 +185,7 @@
     } else {
       rows = rows.map((r) => ({ ...r, _dia: proximaAPartir(r, hojeISO()) }));
     }
-    rows.sort((a, b) => (a._dia || "9999").localeCompare(b._dia || "9999") || String(a.promotor || "").localeCompare(String(b.promotor || ""), "pt-BR")
+    rows.sort((a, b) => (a._dia || "9999").localeCompare(b._dia || "9999") || String((VEND ? a.vendedor : a.promotor) || "").localeCompare(String((VEND ? b.vendedor : b.promotor) || ""), "pt-BR")
       || ((a.sequencia_visita ?? 999) - (b.sequencia_visita ?? 999)) || String(a.cliente || "").localeCompare(String(b.cliente || ""), "pt-BR"));
     return rows;
   }
@@ -268,7 +273,7 @@
 
   function resumoVendedor() {
     const box = el("resumoVend");
-    if (state.modo === "cobertura" || !state.clientes.length) { box.style.display = "none"; return; }
+    if (VEND || state.modo === "cobertura" || !state.clientes.length) { box.style.display = "none"; return; }
     const vends = cobertura().filter((v) => !state.vendedor || String(v.cod) === state.vendedor);
     const total = vends.reduce((s, v) => s + v.total, 0), at = vends.reduce((s, v) => s + v.atendidas, 0);
     const pct = total ? Math.round(at / total * 100) : 0;
@@ -291,7 +296,7 @@
 
     el("kpis").innerHTML = `
       <div class="kpi"><div class="l">${state.modo === "dia" ? "Lojas no dia" : state.modo === "semana" ? "Visitas na semana" : "Lojas com rota"}</div><div class="v">${fmtInt.format(state.modo === "todos" ? rows.filter((r) => r.proxima_visita).length : rows.length)}</div><div class="s">${lojas} lojas distintas</div></div>
-      <div class="kpi"><div class="l">Promotores</div><div class="v">${proms}</div><div class="s">${cidades} cidades</div></div>
+      <div class="kpi"><div class="l">${VEND ? "Vendedores" : "Promotores"}</div><div class="v">${VEND ? new Set(rows.map((r) => r.cod_vendedor)).size : proms}</div><div class="s">${cidades} cidades</div></div>
       <div class="kpi"><div class="l">Sem comprar há +30 dias</div><div class="v">${semCompra}</div><div class="s">entre as lojas listadas</div></div>
       ${state.modo === "todos" ? `<div class="kpi"><div class="l">Sem rota definida</div><div class="v">${semRota}</div><div class="s">lojas sem próxima visita</div></div>` : ""}`;
 
@@ -303,8 +308,9 @@
     // agrupa por dia (semana) e por promotor
     const groups = new Map();
     rows.forEach((r) => {
-      const k = (state.modo === "semana" ? r._dia : "") + "|" + (r.promotor || "Sem promotor");
-      if (!groups.has(k)) groups.set(k, { dia: r._dia, promotor: r.promotor || "Sem promotor", cod: r.cod_promotor, rows: [] });
+      const nome = VEND ? (r.vendedor || "Sem vendedor") : (r.promotor || "Sem promotor");
+      const k = (state.modo === "semana" ? r._dia : "") + "|" + nome;
+      if (!groups.has(k)) groups.set(k, { dia: r._dia, promotor: nome, cod: VEND ? r.cod_vendedor : r.cod_promotor, rows: [] });
       groups.get(k).rows.push(r);
     });
 
@@ -315,10 +321,10 @@
         html += `<div class="dayhead"><b>${diaSemana(g.dia)}</b><span class="muted">${fmtDate(g.dia)}</span></div>`;
       }
       html += `<div class="rt-group">
-        <h3>👤 ${esc(g.promotor)} <span class="cnt">${g.rows.length} ${g.rows.length === 1 ? "loja" : "lojas"}${g.rows[0].supervisor_promotor ? " · " + esc(g.rows[0].supervisor_promotor) : ""}</span></h3>
+        <h3>👤 ${esc(g.promotor)} <span class="cnt">${g.rows.length} ${g.rows.length === 1 ? "loja" : "lojas"}${VEND ? (g.rows[0].supervisor ? " · " + esc(g.rows[0].supervisor) : "") : (g.rows[0].supervisor_promotor ? " · " + esc(g.rows[0].supervisor_promotor) : "")}</span></h3>
         <div class="table-wrap cards"><table>
           <thead><tr>
-            <th class="num">Seq</th><th>Loja</th><th>Endereço</th>${isVendedor ? "" : "<th>Vendedor</th>"}
+            <th class="num">Seq</th><th>Loja</th><th>Endereço</th>${isVendedor || VEND ? "" : "<th>Vendedor</th>"}
             <th>Visita</th><th>Frequência</th><th>Próxima</th><th>Última compra</th><th>Últ. visita prevista</th>
           </tr></thead>
           <tbody>${g.rows.slice(0, state.modo === "todos" ? (state.limite || PAGE_MAX) : 100000).map((r) => `
@@ -326,7 +332,7 @@
               <td class="num seq" data-l="Seq">${r.sequencia_visita ?? ""}</td>
               <td class="loja" data-l="Loja"><div class="desc">${linkCli(r, `<b>${esc(r.fantasia || r.cliente)}</b>`)}</div><div class="small">${esc(r.fantasia ? r.cliente : "")} <span class="mono">${r.codcli}</span></div></td>
               <td data-l="Endereço"><div>${esc(r.cidade || "")}${r.uf ? "/" + esc(r.uf) : ""}</div><div class="addr">${esc([r.endereco, r.numero].filter(Boolean).join(", "))}${r.bairro ? " · " + esc(r.bairro) : ""}</div></td>
-              ${isVendedor ? "" : `<td data-l="Vendedor" class="small">${esc(r.vendedor || "")}</td>`}
+              ${isVendedor || VEND ? "" : `<td data-l="Vendedor" class="small">${esc(r.vendedor || "")}</td>`}
               <td data-l="Visita">${r._dia ? `${fmtDate(r._dia)}<div class="small">${diaSemana(r._dia).toLowerCase()}${r.horario_visita && r.horario_visita !== "00:00" ? " · " + esc(r.horario_visita) : ""}</div>` : `<span class="badge gray">sem rota</span>`}</td>
               <td data-l="Frequência">${r.periodicidade ? `a cada ${r.periodicidade} dias` : "—"}${r.dia_fixo === "S" ? `<div class="small">dia fixo</div>` : ""}</td>
               <td data-l="Próxima">${state.modo === "todos" ? (r._dia ? fmtDate(visitaSeguinte(r, r._dia)) : "—") : fmtDate(visitaSeguinte(r, r._dia))}</td>
@@ -353,7 +359,7 @@
     }
     const rows = filtrar(); if (!rows.length) return Mix.toast("Nada para exportar.", "err");
     const data = rows.map((r) => ({
-      "Data visita": r._dia ? fmtDate(r._dia) : "", "Dia": r._dia ? diaSemana(r._dia) : "", "Promotor": r.promotor, "Seq": r.sequencia_visita ?? "",
+      "Data visita": r._dia ? fmtDate(r._dia) : "", "Dia": r._dia ? diaSemana(r._dia) : "", ...(VEND ? {} : { "Promotor": r.promotor }), "Seq": r.sequencia_visita ?? "",
       "Cód. cliente": r.codcli, "Cliente": r.cliente, "Fantasia": r.fantasia, "CNPJ/CPF": r.cnpj_cpf,
       "Endereço": [r.endereco, r.numero].filter(Boolean).join(", "), "Bairro": r.bairro, "Cidade": r.cidade, "UF": r.uf,
       ...(isVendedor ? {} : { "Vendedor": r.vendedor, "Supervisor": r.supervisor }),
@@ -363,7 +369,7 @@
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Roteiro");
-    const nome = state.modo === "dia" ? `roteiro_${state.data}` : state.modo === "semana" ? `roteiro_semana_${state.data}` : "roteiro_completo";
+    const nome = (VEND ? "roteiro_vendedor" : "roteiro") + (state.modo === "dia" ? `_${state.data}` : state.modo === "semana" ? `_semana_${state.data}` : "_completo");
     XLSX.writeFile(wb, nome + ".xlsx");
   }
 
@@ -373,7 +379,7 @@
     state.modo = b.dataset.modo; state.limite = null;
     const dateCtl = state.modo === "dia" || state.modo === "semana", cob = state.modo === "cobertura";
     ["fData", "btnPrev", "btnNext", "btnHoje"].forEach((id) => el(id).style.display = dateCtl ? "" : "none");
-    el("fPromotor").style.display = cob ? "none" : ""; el("fCob").style.display = cob ? "" : "none";
+    el("fPromotor").style.display = cob || VEND ? "none" : ""; el("fCob").style.display = cob ? "" : "none";
     render();
   }));
   el("fData").addEventListener("change", (e) => { if (e.target.value) { state.data = e.target.value; render(); } });

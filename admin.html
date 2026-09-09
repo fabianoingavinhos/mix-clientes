@@ -27,6 +27,7 @@
         <button class="active" data-tab="users">Usuários</button>
         <button data-tab="upload">Planilha do mix</button>
         <button data-tab="roteiro">Planilha do roteiro</button>
+        <button data-tab="rvend">Roteiro vendedor</button>
         <button data-tab="clientes">Planilha de clientes</button>
         <button data-tab="equipe">Equipe na base</button>
         <button data-tab="uso">Uso</button>
@@ -34,6 +35,7 @@
       <div id="tab-users"></div>
       <div id="tab-upload" hidden></div>
       <div id="tab-roteiro" hidden></div>
+      <div id="tab-rvend" hidden></div>
       <div id="tab-clientes" hidden></div>
       <div id="tab-equipe" hidden></div>
       <div id="tab-uso" hidden></div>
@@ -42,7 +44,7 @@
 
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
-    ["users", "upload", "roteiro", "clientes", "equipe", "uso"].forEach((t) => el("tab-" + t).hidden = t !== b.dataset.tab);
+    ["users", "upload", "roteiro", "rvend", "clientes", "equipe", "uso"].forEach((t) => el("tab-" + t).hidden = t !== b.dataset.tab);
     if (b.dataset.tab === "equipe") loadEquipe();
     if (b.dataset.tab === "uso") loadUso();
   }));
@@ -550,6 +552,161 @@
   }
 
   // =====================================================================
+  //  UPLOAD DO ROTEIRO DO VENDEDOR (relatório clientes x dia de visita do RCA)
+  //  O mesmo arquivo traz todos os clientes: alimenta roteiro_vendedor E a base de clientes.
+  // =====================================================================
+  const RV_MAP = {
+    cod_supervisor: "cod_supervisor", supervisor: "supervisor", cod_rca: "cod_vendedor", rca: "vendedor", cod_vendedor: "cod_vendedor", vendedor: "vendedor",
+    codcli: "codcli", cliente: "cliente", fantasia: "fantasia", cnpj_cpf: "cnpj_cpf", endereco: "endereco", numero: "numero", bairro: "bairro", cidade: "cidade", uf: "uf", telefone: "telefone",
+    dia_semana_cadastrado: "dia_semana_cadastrado", dia_semana: "dia_semana", data_proxima_visita: "proxima_visita", proxima_visita: "proxima_visita",
+    sequencia_visita: "sequencia_visita", horario_visita: "horario_visita", periodicidade: "periodicidade", numero_semana: "numero_semana", ciclo_visita: "ciclo_visita", dia_fixo: "dia_fixo",
+    data_inicio_rota: "data_inicio_rota", data_final_rota: "data_final_rota", ultima_visita_prevista: "ultima_visita_prevista", data_referencia: "data_referencia", zona: "zona", observacao: "observacao",
+    status_rota: "status_rota", data_ultima_compra: "ultima_compra", ultima_compra: "ultima_compra", dias_sem_compra: "dias_sem_comprar", dias_sem_comprar: "dias_sem_comprar",
+    status_ultima_compra: "status_ultima_compra", qtd_clientes_rca: "qtd_clientes_rca", qtd_clientes_supervisor: "qtd_clientes_supervisor",
+  };
+  const RV_INT = new Set(["cod_supervisor","cod_vendedor","codcli","sequencia_visita","periodicidade","numero_semana","dias_sem_comprar","qtd_clientes_rca","qtd_clientes_supervisor"]);
+  const RV_DATE = new Set(["proxima_visita","data_inicio_rota","data_final_rota","ultima_visita_prevista","data_referencia","ultima_compra"]);
+  const RV_ROTA_COLS = ["cod_supervisor","supervisor","cod_vendedor","vendedor","codcli","cliente","fantasia","cnpj_cpf","endereco","numero","bairro","cidade","uf","telefone",
+    "dia_semana_cadastrado","dia_semana","proxima_visita","sequencia_visita","horario_visita","periodicidade","numero_semana","ciclo_visita","dia_fixo","data_inicio_rota","data_final_rota",
+    "ultima_visita_prevista","data_referencia","zona","observacao","status_rota","ultima_compra","dias_sem_comprar","status_ultima_compra"];
+  const RV_CLI_COLS = ["cod_supervisor","supervisor","cod_vendedor","vendedor","codcli","cliente","fantasia","cnpj_cpf","endereco","numero","bairro","cidade","uf","telefone",
+    "ultima_compra","dias_sem_comprar","status_ultima_compra","qtd_clientes_rca","qtd_clientes_supervisor"];
+
+  let parsedRv = null;
+
+  async function renderRvend() {
+    const { data: meta } = await sb.from("roteiro_vendedor_meta").select("*").eq("id", 1).maybeSingle();
+    el("tab-rvend").innerHTML = `
+      <div class="card card-pad" style="margin-bottom:16px">
+        <h2>Roteiro do vendedor atual</h2>
+        ${meta?.atualizado_em
+          ? `<p class="sub" style="margin:0">Última atualização em <b>${new Date(meta.atualizado_em).toLocaleString("pt-BR")}</b> — ${fmtInt.format(meta.linhas)} visitas (${esc(meta.arquivo || "")})</p>`
+          : `<p class="sub" style="margin:0">Nenhum roteiro de vendedor carregado ainda. <span class="muted">Se aparecer erro ao carregar, execute <span class="mono">schema_roteiro_vendedor.sql</span> no SQL Editor do Supabase.</span></p>`}
+      </div>
+      <div class="card card-pad">
+        <h2>Carregar roteiro do vendedor</h2>
+        <div class="msg info" style="margin:0 0 14px">
+          <b>Origem:</b> relatório de <b>clientes x dia de visita do RCA</b>, exportado em <b>.csv</b> com cabeçalho (COD_SUPERVISOR, COD_RCA, CODCLI, DIA_SEMANA, DATA_PROXIMA_VISITA, SEQUENCIA_VISITA, PERIODICIDADE, STATUS_ROTA, DATA_ULTIMA_COMPRA…).
+        </div>
+        <p class="sub">Como este relatório traz <b>todos os clientes</b> (com e sem rota), ele também <b>atualiza a base de clientes</b> da aba Clientes — não precisa carregar a planilha de clientes separadamente. Roteiro e base atuais são substituídos.</p>
+        <div class="dropzone" id="rvDrop">
+          <input type="file" id="rvFile" accept=".xlsx,.xls,.csv" hidden>
+          <div><b>Clique para escolher</b> ou arraste o arquivo aqui</div>
+          <div style="font-size:13px;margin-top:4px">xlsx · xls · csv</div>
+        </div>
+        <div id="rvInfo" style="margin-top:14px"></div>
+        <div class="progress" id="rvProg" hidden><div></div></div>
+        <div id="rvMsg"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn" id="rvImport" disabled>Substituir roteiro do vendedor e base de clientes</button>
+          <span class="muted" id="rvStatus" style="font-size:13px"></span>
+        </div>
+      </div>`;
+    const drop = el("rvDrop"), file = el("rvFile");
+    drop.addEventListener("click", () => file.click());
+    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) handleRvFile(e.dataTransfer.files[0]); });
+    file.addEventListener("change", () => file.files[0] && handleRvFile(file.files[0]));
+    el("rvImport").addEventListener("click", importRv);
+  }
+
+  function parseRvRows(raw) {
+    const first = (raw[0] || []).map(normHeader);
+    const hasHeader = first.some((h) => RV_MAP[h]) && isNaN(parseInt(String(raw[0][0]), 10));
+    if (!hasHeader) throw new Error("O relatório do roteiro do vendedor precisa vir com a linha de cabeçalho (COD_SUPERVISOR; COD_RCA; CODCLI; …).");
+    const idx = {};
+    first.forEach((h, i) => { const c = RV_MAP[h]; if (c && idx[c] == null) idx[c] = i; });
+    const missing = ["codcli", "cliente", "cod_vendedor", "cod_supervisor", "proxima_visita"].filter((c) => idx[c] == null);
+    if (missing.length) throw new Error("Colunas obrigatórias não encontradas: " + missing.join(", ").toUpperCase());
+    const found = Object.keys(idx), rotas = [], clientes = [], seen = new Set();
+    for (let i = 1; i < raw.length; i++) {
+      const r = raw[i]; if (!r || r[idx.codcli] == null || r[idx.codcli] === "") continue;
+      const o = {};
+      for (const c of found) {
+        let v = r[idx[c]];
+        if (RV_INT.has(c)) v = toInt(v);
+        else if (RV_DATE.has(c)) v = toDate(v);
+        else { v = v == null ? null : String(v).trim(); if (v === "") v = null; }
+        o[c] = v;
+      }
+      if (o.codcli == null) continue;
+      if (o.proxima_visita) { const rt = {}; RV_ROTA_COLS.forEach((c) => { if (c in o) rt[c] = o[c]; }); rotas.push(rt); }
+      if (!seen.has(o.codcli)) { seen.add(o.codcli); const cl = {}; RV_CLI_COLS.forEach((c) => { if (c in o) cl[c] = o[c]; }); clientes.push(cl); }
+    }
+    return { rotas, clientes, found };
+  }
+
+  function handleRvFile(f) {
+    parsedRv = null; el("rvImport").disabled = true;
+    showMsg(el("rvMsg"), ""); el("rvInfo").innerHTML = `<span class="spinner dark"></span> Lendo ${esc(f.name)}…`;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const raw = readRaw(f, e.target.result);
+        if (raw.length < 2) throw new Error("Planilha vazia.");
+        const { rotas, clientes, found } = parseRvRows(raw);
+        if (!clientes.length) throw new Error("Nenhuma linha válida encontrada.");
+        parsedRv = { rotas, clientes, name: f.name };
+        const vend = new Set(clientes.map((r) => r.cod_vendedor)).size, comRota = new Set(rotas.map((r) => r.codcli)).size;
+        const ex = rotas[0] || clientes[0];
+        el("rvInfo").innerHTML = `
+          <div class="kpis" style="margin:0">
+            <div class="kpi"><div class="l">Clientes</div><div class="v">${fmtInt.format(clientes.length)}</div><div class="s">${vend} vendedores</div></div>
+            <div class="kpi"><div class="l">Com rota do vendedor</div><div class="v">${fmtInt.format(comRota)}</div><div class="s">${fmtInt.format(rotas.length)} visitas programadas</div></div>
+            <div class="kpi"><div class="l">Sem rota</div><div class="v">${fmtInt.format(clientes.length - comRota)}</div></div>
+          </div>
+          <div class="muted" style="font-size:13px;margin-top:8px">Colunas reconhecidas: ${found.length}<br>
+            Conferência: <b>${esc(ex.fantasia || ex.cliente)}</b> · vendedor ${esc(ex.vendedor || "")} (${ex.cod_vendedor}) · ${ex.dia_semana ? esc(ex.dia_semana) + " · próxima visita " + (ex.proxima_visita || "—") + " · a cada " + (ex.periodicidade ?? "—") + " dias" : "sem rota"}</div>`;
+        el("rvImport").disabled = false;
+      } catch (err) {
+        el("rvInfo").innerHTML = ""; showMsg(el("rvMsg"), err.message, "err");
+      }
+    };
+    reader.readAsArrayBuffer(f);
+  }
+
+  async function enviarLotes(tabela, rows, bar, st, rotulo, BATCH = 500) {
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const chunk = rows.slice(i, i + BATCH);
+      let tries = 0;
+      while (true) {
+        const { error } = await sb.from(tabela).insert(chunk);
+        if (!error) break;
+        if (++tries >= 3) throw error;
+        await new Promise((r) => setTimeout(r, 1200));
+      }
+      const done = Math.min(i + BATCH, rows.length);
+      bar.style.width = Math.round((done / rows.length) * 100) + "%";
+      st.textContent = `Enviando ${rotulo}: ${fmtInt.format(done)} / ${fmtInt.format(rows.length)}…`;
+    }
+  }
+
+  async function importRv() {
+    if (!parsedRv) return;
+    const btn = el("rvImport"); btn.disabled = true;
+    const prog = el("rvProg"), bar = prog.firstElementChild, st = el("rvStatus");
+    prog.hidden = false; bar.style.width = "0%"; showMsg(el("rvMsg"), "");
+    try {
+      st.textContent = "Limpando roteiro do vendedor…";
+      let { error } = await sb.rpc("admin_limpar_roteiro_vendedor"); if (error) throw error;
+      await enviarLotes("roteiro_vendedor", parsedRv.rotas, bar, st, "visitas");
+      ({ error } = await sb.rpc("admin_registrar_upload_roteiro_vendedor", { p_linhas: parsedRv.rotas.length, p_arquivo: parsedRv.name })); if (error) throw error;
+      st.textContent = "Limpando base de clientes…";
+      ({ error } = await sb.rpc("admin_limpar_clientes")); if (error) throw error;
+      await enviarLotes("clientes", parsedRv.clientes, bar, st, "clientes");
+      ({ error } = await sb.rpc("admin_registrar_upload_clientes", { p_linhas: parsedRv.clientes.length, p_arquivo: parsedRv.name })); if (error) throw error;
+      st.textContent = ""; showMsg(el("rvMsg"), `Roteiro do vendedor (${fmtInt.format(parsedRv.rotas.length)} visitas) e base de clientes (${fmtInt.format(parsedRv.clientes.length)}) atualizados.`, "ok");
+      toast("Roteiro do vendedor importado.");
+      parsedRv = null;
+      setTimeout(renderRvend, 1500);
+    } catch (err) {
+      st.textContent = ""; showMsg(el("rvMsg"), "Erro: " + err.message + " — envie a planilha novamente.", "err");
+      btn.disabled = false;
+    }
+  }
+
+  // =====================================================================
   //  UPLOAD DA PLANILHA DE CLIENTES (base cadastral)
   // =====================================================================
   const CL_MAP = {
@@ -810,6 +967,7 @@
   await loadUsers();
   renderUpload();
   renderRoteiro();
+  renderRvend();
   renderClientes();
 })();
 </script>
