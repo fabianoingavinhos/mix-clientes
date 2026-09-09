@@ -48,6 +48,8 @@
   const p = ctx.profile;
   const root = el("root");
   const isVendedor = p.role === "vendedor";
+  const restrito = Mix.protegerDados(p); // vendedor: sem exportar, listas paginadas
+  const PAGE_MAX = restrito ? 25 : 1500;
 
   const scope = p.role === "admin" ? "Todas as lojas da base"
     : p.role === "supervisor" ? `Lojas da sua equipe (supervisor ${p.cod_supervisor ?? "—"})`
@@ -69,7 +71,7 @@
             <h1>Roteiro dos promotores</h1>
             <p class="sub" style="margin:0">${esc(scope)} · <span id="metaInfo" class="muted"></span></p>
           </div>
-          <div class="row"><button class="btn ghost sm" id="btnExport">⬇ Exportar Excel</button></div>
+          <div class="row">${restrito ? "" : `<button class="btn ghost sm" id="btnExport">⬇ Exportar Excel</button>`}</div>
         </div>
 
         <div class="rt-toolbar">
@@ -229,7 +231,7 @@
           ${state.cobVend != null ? `<button class="btn ghost sm" id="cobTodos">Todos os vendedores</button>` : ""}</h3>
         <div class="table-wrap cards"><table>
           <thead><tr><th>Loja</th><th>Cidade</th>${isVendedor ? "" : "<th>Vendedor</th>"}<th>Situação</th><th>Promotor</th><th>Última compra</th></tr></thead>
-          <tbody>${lojas.slice(0, 1500).map((c) => `
+          <tbody>${lojas.slice(0, state.limite || PAGE_MAX).map((c) => `
             <tr>
               <td class="loja" data-l="Loja"><div class="desc">${linkCli(c, `<b>${esc(c.fantasia || c.cliente)}</b>`)}</div><div class="small">${esc(c.fantasia ? c.cliente : "")} <span class="mono">${c.codcli}</span></div></td>
               <td data-l="Cidade">${esc(c.cidade || "")}${c.uf ? "/" + esc(c.uf) : ""}</td>
@@ -240,10 +242,11 @@
             </tr>`).join("") || `<tr><td colspan="6" class="empty">Nenhuma loja neste filtro.</td></tr>`}
           </tbody>
         </table></div>
-        ${lojas.length > 1500 ? `<div class="muted" style="font-size:12px;margin-top:6px">Mostrando 1.500 de ${fmtInt.format(lojas.length)} — refine a busca ou exporte para Excel.</div>` : ""}
+        ${lojas.length > (state.limite || PAGE_MAX) ? `<div class="row" style="margin-top:8px;align-items:center;gap:10px"><button class="btn ghost sm" id="btnMais">Mostrar mais</button><span class="muted" style="font-size:12px">Mostrando ${fmtInt.format(state.limite || PAGE_MAX)} de ${fmtInt.format(lojas.length)}</span></div>` : ""}
       </div>`;
     el("lista").querySelectorAll("tr.cob-row").forEach((tr) => tr.addEventListener("click", () => { const c = +tr.dataset.cod; state.cobVend = state.cobVend === c ? null : c; render(); }));
     el("cobTodos")?.addEventListener("click", () => { state.cobVend = null; render(); });
+    el("btnMais")?.addEventListener("click", () => { state.limite = (state.limite || PAGE_MAX) + PAGE_MAX; render(); });
   }
 
   // ---------- render ----------
@@ -296,7 +299,7 @@
             <th class="num">Seq</th><th>Loja</th><th>Endereço</th>${isVendedor ? "" : "<th>Vendedor</th>"}
             <th>Visita</th><th>Frequência</th><th>Próxima</th><th>Última compra</th><th>Últ. visita prevista</th>
           </tr></thead>
-          <tbody>${g.rows.map((r) => `
+          <tbody>${g.rows.slice(0, state.modo === "todos" ? (state.limite || PAGE_MAX) : 100000).map((r) => `
             <tr class="${r.proxima_visita ? "" : "sem-rota"}">
               <td class="num seq" data-l="Seq">${r.sequencia_visita ?? ""}</td>
               <td class="loja" data-l="Loja"><div class="desc">${linkCli(r, `<b>${esc(r.fantasia || r.cliente)}</b>`)}</div><div class="small">${esc(r.fantasia ? r.cliente : "")} <span class="mono">${r.codcli}</span></div></td>
@@ -310,9 +313,11 @@
             </tr>`).join("")}
           </tbody>
         </table></div>
+        ${state.modo === "todos" && g.rows.length > (state.limite || PAGE_MAX) ? `<div class="row" style="margin-top:8px;align-items:center;gap:10px"><button class="btn ghost sm btnMais">Mostrar mais</button><span class="muted" style="font-size:12px">Mostrando ${fmtInt.format(state.limite || PAGE_MAX)} de ${fmtInt.format(g.rows.length)}</span></div>` : ""}
       </div>`;
     }
     el("lista").innerHTML = html;
+    el("lista").querySelectorAll(".btnMais").forEach((b) => b.addEventListener("click", () => { state.limite = (state.limite || PAGE_MAX) + PAGE_MAX; render(); }));
   }
 
   // ---------- exportação ----------
@@ -343,7 +348,7 @@
   // ---------- eventos ----------
   document.querySelectorAll(".seg button").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll(".seg button").forEach((x) => x.classList.toggle("on", x === b));
-    state.modo = b.dataset.modo;
+    state.modo = b.dataset.modo; state.limite = null;
     const dateCtl = state.modo === "dia" || state.modo === "semana", cob = state.modo === "cobertura";
     ["fData", "btnPrev", "btnNext", "btnHoje"].forEach((id) => el(id).style.display = dateCtl ? "" : "none");
     el("fPromotor").style.display = cob ? "none" : ""; el("fCob").style.display = cob ? "" : "none";
@@ -354,10 +359,10 @@
   el("btnNext").addEventListener("click", () => { state.data = addDays(state.data, state.modo === "semana" ? 7 : 1); el("fData").value = state.data; render(); });
   el("btnHoje").addEventListener("click", () => { state.data = hojeISO(); el("fData").value = state.data; render(); });
   el("fPromotor").addEventListener("change", (e) => { state.promotor = e.target.value; render(); });
-  el("fCob").addEventListener("change", (e) => { state.cobFiltro = e.target.value; render(); });
+  el("fCob").addEventListener("change", (e) => { state.cobFiltro = e.target.value; state.limite = null; render(); });
   el("fVendedor")?.addEventListener("change", (e) => { state.vendedor = e.target.value; state.cobVend = null; render(); });
   let t; el("fQ").addEventListener("input", (e) => { clearTimeout(t); t = setTimeout(() => { state.q = e.target.value; render(); }, 200); });
-  el("btnExport").addEventListener("click", exportExcel);
+  el("btnExport")?.addEventListener("click", exportExcel);
 
   loadMeta();
   loadAll();

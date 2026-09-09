@@ -56,6 +56,7 @@
 
   // ---------------- APP ----------------
   const isVendedor = () => state.profile?.role === "vendedor";
+  let restrito = false; // proteção anticópia ativa (vendedor): sem exportar mix, busca exige termo
   let state = { profile: null, results: [], selected: null, mix: [], filter: "", status: "", sort: { key: "valor_total_comprado", dir: -1 }, pedido: {}, estoque: {} };
 
   // Rascunho de pedido por cliente (fica salvo no navegador)
@@ -96,6 +97,7 @@
         </div>
       </div>`;
     Mix.bindTopbar();
+    restrito = Mix.protegerDados(p);
     renderDetail();
     loadMeta();
     registrar("acesso");
@@ -130,8 +132,12 @@
     q = q.trim();
     lastQuery = q;
     const box = el("results");
-    box.innerHTML = `<div class="empty"><span class="spinner dark"></span></div>`;
-    const { data, error } = await sb.rpc("buscar_clientes", { q, limite: 80 });
+    if (restrito && q.length < 2) {
+      state.results = [];
+      box.innerHTML = `<div class="empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg><div>Digite o código, nome ou fantasia do cliente para buscar.</div></div>`;
+      return;
+    }
+    const { data, error } = await sb.rpc("buscar_clientes", { q, limite: restrito ? 30 : 80 });
     if (lastQuery !== q) return; // resposta antiga
     if (error) { box.innerHTML = `<div class="msg err">${esc(error.message)}</div>`; return; }
     state.results = data || [];
@@ -155,7 +161,7 @@
           ${isVendedor() ? "" : `<span>${fmtBRL.format(c.valor_total || 0)}</span>`}
           ${state.profile.role !== "vendedor" ? `<span>· ${esc(c.vendedor || "")}</span>` : ""}
         </div>
-      </button>`).join("") + (state.results.length >= 80 ? `<div class="muted" style="text-align:center;font-size:12px;padding:6px">Mostrando 80 primeiros — refine a busca</div>` : "");
+      </button>`).join("") + (state.results.length >= (restrito ? 30 : 80) ? `<div class="muted" style="text-align:center;font-size:12px;padding:6px">Mostrando ${restrito ? 30 : 80} primeiros — refine a busca</div>` : "");
     box.querySelectorAll(".result").forEach((b) => b.addEventListener("click", () => selectClient(+b.dataset.cod)));
   }
 
@@ -208,7 +214,7 @@
           </div>
           <div class="row">
             <button class="btn ghost sm mobile-only" id="btnBack">← Voltar</button>
-            <button class="btn ghost sm" id="btnExport">⬇ Exportar Excel</button>
+            ${restrito ? "" : `<button class="btn ghost sm" id="btnExport">⬇ Exportar Excel</button>`}
           </div>
         </div>
 
@@ -248,7 +254,7 @@
 
     el("fMix").addEventListener("input", (e) => { state.filter = e.target.value; renderTable(); });
     el("fStatus").addEventListener("change", (e) => { state.status = e.target.value; renderTable(); });
-    el("btnExport").addEventListener("click", exportExcel);
+    el("btnExport")?.addEventListener("click", exportExcel);
     el("tableWrap").addEventListener("input", (e) => {
       const isQtd = e.target.classList.contains("qtd"), isEst = e.target.classList.contains("est");
       if (!isQtd && !isEst) return;

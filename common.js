@@ -134,6 +134,45 @@
     setTimeout(() => t.remove(), 3200);
   }
 
+  /**
+   * Proteção contra cópia para o perfil vendedor: bloqueia seleção de texto, botão direito,
+   * copiar/imprimir/salvar por teclado, impressão da página e aplica marca d'água com nome e data.
+   * Não impede print/foto de tela — serve para dificultar cópia em massa e identificar a origem.
+   * Retorna true se as restrições estão ativas (páginas usam isso para esconder botões de exportar).
+   */
+  function protegerDados(profile) {
+    const restrito = !!profile && profile.role === "vendedor" && cfg.PROTEGER_VENDEDOR !== false;
+    if (!restrito) return false;
+    const marca = `${profile.nome} · ${new Date().toLocaleDateString("pt-BR")} ${new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
+    const st = document.createElement("style");
+    st.textContent = `
+      body.protegido .results, body.protegido table, body.protegido .kpis, body.protegido .client-head, body.protegido .rt-group { user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+      body.protegido input, body.protegido textarea { user-select:text; -webkit-user-select:text; }
+      @media print { body.protegido > * { display:none !important; } body.protegido::before { content:"Impressão desativada para este perfil."; display:block; padding:40px; font:16px sans-serif; } }
+      .marca-dagua { position:fixed; inset:0; pointer-events:none; z-index:50; overflow:hidden; opacity:.07; }
+      .marca-dagua span { position:absolute; white-space:nowrap; font:700 15px/1 sans-serif; color:#000; transform:rotate(-24deg); }`;
+    document.head.appendChild(st);
+    document.body.classList.add("protegido");
+    const wm = document.createElement("div"); wm.className = "marca-dagua"; wm.setAttribute("aria-hidden", "true");
+    let html = "";
+    for (let y = -40; y < 2400; y += 140) for (let x = -200; x < 2600; x += 420) html += `<span style="left:${x}px;top:${y}px">${esc(marca)}</span>`;
+    wm.innerHTML = html;
+    document.body.appendChild(wm);
+    const bloquear = (e) => { e.preventDefault(); toast("Cópia desativada para este perfil.", "err"); };
+    document.addEventListener("contextmenu", (e) => { if (!e.target.closest("input,textarea")) bloquear(e); });
+    document.addEventListener("copy", (e) => { if (!e.target.closest("input,textarea")) bloquear(e); });
+    document.addEventListener("cut", (e) => { if (!e.target.closest("input,textarea")) bloquear(e); });
+    document.addEventListener("dragstart", (e) => { if (!e.target.closest("input,textarea")) e.preventDefault(); });
+    document.addEventListener("keydown", (e) => {
+      const k = (e.key || "").toLowerCase(), mod = e.ctrlKey || e.metaKey;
+      if (mod && ["p", "s", "u"].includes(k)) bloquear(e);
+      if (mod && ["a", "c", "x"].includes(k) && !e.target.closest("input,textarea")) bloquear(e);
+      if (e.key === "F12" || (mod && e.shiftKey && ["i", "j", "c"].includes(k))) e.preventDefault();
+    });
+    window.addEventListener("beforeprint", () => toast("Impressão desativada para este perfil.", "err"));
+    return true;
+  }
+
   window.Mix = { sb, configured, cfg, fmtBRL, fmtNum, fmtInt, fmtDate, statusClass, esc, el, showMsg, ROLE_LABEL,
-    getSessionProfile, login, logout, requireAuth, renderTopbar, bindTopbar, openModal, closeModal, toast };
+    getSessionProfile, login, logout, requireAuth, renderTopbar, bindTopbar, openModal, closeModal, toast, protegerDados };
 })();

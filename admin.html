@@ -599,8 +599,11 @@
     const nunca = uso.filter((u) => !ultimo(u));
     const consultas30 = uso.reduce((s, u) => s + (+u.consultas_30d || 0), 0);
     const consultasHoje = uso.reduce((s, u) => s + (+u.consultas_hoje || 0), 0);
+    const LIMITE_1H = 50; // clientes distintos consultados em 1 hora que disparam o alerta
+    const alerta = uso.filter((u) => u.role === "vendedor" && (+u.clientes_1h || 0) >= LIMITE_1H);
 
     el("tab-uso").innerHTML = `
+      ${alerta.length ? `<div class="msg err" style="margin:0 0 16px"><b>⚠ Volume anormal de consultas na última hora:</b> ${alerta.map((u) => `${esc(u.nome)} (${u.clientes_1h} clientes)`).join(", ")}. Pode indicar cópia da carteira — verifique com o vendedor.</div>` : ""}
       <div class="kpis" style="margin:0 0 16px">
         <div class="kpi"><div class="l">Usuários cadastrados</div><div class="v">${uso.length}</div><div class="s">${nunca.length} nunca acessaram</div></div>
         <div class="kpi"><div class="l">Ativos hoje</div><div class="v">${ativos(1)}</div><div class="s">${consultasHoje} consultas hoje</div></div>
@@ -614,10 +617,10 @@
           <div class="row"><input type="search" id="usoFilter" placeholder="Filtrar…" style="max-width:220px"><button class="btn ghost sm" id="usoRefresh">↻ Atualizar</button></div>
         </div>
         <div class="table-wrap"><table>
-          <thead><tr><th>Usuário</th><th>Perfil</th><th>Último acesso</th><th class="num">Acessos 30d</th><th class="num">Consultas 30d</th><th class="num">Clientes 30d</th><th class="num">Hoje</th><th class="num">Total</th></tr></thead>
+          <thead><tr><th>Usuário</th><th>Perfil</th><th>Último acesso</th><th class="num">Acessos 30d</th><th class="num">Consultas 30d</th><th class="num">Clientes 30d</th><th class="num">Hoje</th><th class="num">Últ. 1h</th><th class="num">Total</th></tr></thead>
           <tbody id="usoBody"></tbody>
         </table></div>
-        <p class="muted" style="font-size:12px;margin:10px 0 0">"Acesso" = abertura do sistema (contado no máximo 1x por minuto). "Consulta" = cliente aberto na tela de mix. Último acesso considera também o login pelo Supabase.</p>
+        <p class="muted" style="font-size:12px;margin:10px 0 0">"Acesso" = abertura do sistema (contado no máximo 1x por minuto). "Consulta" = cliente aberto na tela de mix. Último acesso considera também o login pelo Supabase. "Últ. 1h" = clientes distintos consultados na última hora; ${LIMITE_1H} ou mais dispara o alerta de volume.</p>
       </div>
 
       <div class="card card-pad">
@@ -646,8 +649,9 @@
           <td class="num"><b>${u.consultas_30d}</b></td>
           <td class="num">${u.clientes_30d}</td>
           <td class="num">${u.consultas_hoje}</td>
+          <td class="num">${(+u.clientes_1h || 0) >= LIMITE_1H ? `<span class="badge bad">${u.clientes_1h}</span>` : (u.clientes_1h ?? 0)}</td>
           <td class="num muted">${u.consultas_total}</td>
-        </tr>`).join("") || `<tr><td colspan="8" class="empty">Nenhum usuário</td></tr>`;
+        </tr>`).join("") || `<tr><td colspan="9" class="empty">Nenhum usuário</td></tr>`;
     };
     el("usoFilter").addEventListener("input", renderRows);
     el("usoRefresh").addEventListener("click", loadUso);
