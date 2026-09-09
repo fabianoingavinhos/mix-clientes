@@ -23,7 +23,7 @@
   .matriz button { border:1px solid var(--border, #ddd); background:#fff; border-radius:10px; padding:12px 14px; text-align:left; cursor:pointer; font:inherit; }
   .matriz button .v { font-size:22px; font-weight:700; }
   .matriz button .s { font-size:12px; opacity:.7; }
-  .matriz button.on { border-color:var(--brand, #7a1f2b); background:#fbf3f4; box-shadow:0 0 0 2px rgba(122,31,43,.15); }
+  .matriz button.on, .btn.ghost.on { border-color:var(--brand, #7a1f2b); background:#fbf3f4; box-shadow:0 0 0 2px rgba(122,31,43,.15); }
   tr.cob-row { cursor:pointer; }
   tr.cob-sel td { background:#fbf3f4; }
   .cob-bar { height:8px; background:#eee; border-radius:4px; overflow:hidden; min-width:90px; }
@@ -151,7 +151,7 @@
     el("matriz").innerHTML = `
       <div class="kpis" style="margin:0">
         <div class="kpi"><div class="l">Clientes</div><div class="v">${fmtInt.format(b.length)}</div><div class="s">${isVendedor ? "" : new Set(b.map((c) => c.cod_vendedor)).size + " vendedores"}</div></div>
-        <div class="kpi"><div class="l">Com venda</div><div class="v">${fmtInt.format(cv)}</div><div class="s">${pct(cv, b.length)} · compraram nos últimos ${state.dias === "nunca" ? "— (já compraram)" : state.dias + " dias"}</div></div>
+        <div class="kpi"><div class="l">Com venda</div><div class="v">${fmtInt.format(cv)}</div><div class="s">${pct(cv, b.length)} · ${state.dias === "nunca" ? "já compraram alguma vez" : "compraram nos últimos " + state.dias + " dias"}</div></div>
         <div class="kpi"><div class="l">Sem venda</div><div class="v">${fmtInt.format(sv)}</div><div class="s">${pct(sv, b.length)} · ${state.dias === "nunca" ? "nunca compraram" : "+" + state.dias + " dias ou nunca"}</div></div>
         <div class="kpi"><div class="l">Atendidos por promotor</div><div class="v">${fmtInt.format(at)}</div><div class="s">${pct(at, b.length)} · ${fmtInt.format(na)} sem promotor</div></div>
       </div>
@@ -162,8 +162,8 @@
       </div>
       <div class="row" style="gap:8px;margin:4px 0 0;flex-wrap:wrap">
         <button class="btn ghost sm ${state.venda === "" && state.atend === "" ? "on" : ""}" data-v="" data-a="">Todos</button>
-        <button class="btn ghost sm" data-v="sem" data-a="">Todos sem venda</button>
-        <button class="btn ghost sm" data-v="" data-a="nao">Todos sem promotor</button>
+        <button class="btn ghost sm ${state.venda === "sem" && state.atend === "" ? "on" : ""}" data-v="sem" data-a="">Todos sem venda</button>
+        <button class="btn ghost sm ${state.venda === "" && state.atend === "nao" ? "on" : ""}" data-v="" data-a="nao">Todos sem promotor</button>
       </div>`;
     el("matriz").querySelectorAll("button[data-v]").forEach((bt) => bt.addEventListener("click", () => {
       const v = bt.dataset.v, a = bt.dataset.a;
@@ -238,7 +238,8 @@
   }
 
   // ---------- eventos ----------
-  el("fDias").addEventListener("change", (e) => { state.dias = e.target.value; state.limite = null; render(); });
+  // Trocar o critério de "sem venda" já filtra a lista pelos clientes sem venda
+  el("fDias").addEventListener("change", (e) => { state.dias = e.target.value; state.venda = "sem"; state.limite = null; render(); });
   el("fVendedor")?.addEventListener("change", (e) => { state.vendedor = e.target.value; state.cobVend = null; state.limite = null; render(); });
   let t; el("fQ").addEventListener("input", (e) => { clearTimeout(t); t = setTimeout(() => { state.q = e.target.value; state.limite = null; render(); }, 200); });
   el("btnExport")?.addEventListener("click", exportExcel);
