@@ -90,6 +90,6 @@ select admin_redefinir_senha((select id from profiles where login = 'admin'), 'n
 A aba **Roteiro** mostra as lojas que cada promotor visita no dia (ou na semana), com sequência, endereço, frequência, próxima visita e última compra. A permissão é a mesma do mix: vendedor vê as lojas do seu `COD_RCA`, supervisor as do seu `COD_SUPERVISOR`, admin tudo.
 
 1. Execute `schema_roteiro.sql` no SQL Editor do Supabase (uma vez).
-2. **Administração → Planilha do roteiro** → carregue o relatório de promotores x dia de visita (.csv com cabeçalho: COD_SUPERVISOR, COD_RCA, COD_PROMOTOR, CODCLI, DATA_PROXIMA_VISITA, PERIODICIDADE…). O roteiro atual é substituído.
+2. **Administração → Planilha do roteiro** → carregue o relatório da **rotina 8236** (promotores x dia de visita), exportado em .csv com cabeçalho (COD_SUPERVISOR, COD_RCA, COD_PROMOTOR, CODCLI, DATA_PROXIMA_VISITA, PERIODICIDADE…). O roteiro atual é substituído.
 
 A planilha traz só a **próxima** visita e a periodicidade (7/14/28 dias); as datas seguintes são calculadas (próxima + n × periodicidade), então dá para consultar qualquer dia futuro.
