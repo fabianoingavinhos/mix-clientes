@@ -90,6 +90,7 @@
           <select id="fCob" style="display:none"><option value="nao">Lojas não atendidas</option><option value="sim">Lojas atendidas</option><option value="todas">Todas as lojas cadastradas</option></select>
           <input type="search" id="fQ" placeholder="Código, nome, fantasia ou cidade…">
         </div>
+        <div id="resumoVend" class="msg info" style="margin:8px 0 0;display:none"></div>
         <div class="kpis" id="kpis"></div>
         <div id="lista"></div>
       </div>
@@ -265,7 +266,21 @@
   }
   const linkCli = (r, txt) => `<a class="cli-link" href="index.html?cli=${r.codcli}" title="Abrir mix do cliente">${txt}</a>`;
 
+  function resumoVendedor() {
+    const box = el("resumoVend");
+    if (state.modo === "cobertura" || !state.clientes.length) { box.style.display = "none"; return; }
+    const vends = cobertura().filter((v) => !state.vendedor || String(v.cod) === state.vendedor);
+    const total = vends.reduce((s, v) => s + v.total, 0), at = vends.reduce((s, v) => s + v.atendidas, 0);
+    const pct = total ? Math.round(at / total * 100) : 0;
+    const quem = isVendedor ? "Você tem" : state.vendedor ? `<b>${esc(vends[0]?.vendedor || "")}</b> tem` : `${vends.length} vendedores têm`;
+    box.innerHTML = `${quem} <b>${fmtInt.format(total)}</b> clientes cadastrados · <b>${fmtInt.format(at)}</b> atendidos por promotor (${pct}%) · <b>${fmtInt.format(total - at)}</b> sem promotor`
+      + (isVendedor ? "" : ` &nbsp;<a href="#" id="verCob" style="font-weight:600">ver cobertura</a>`);
+    box.style.display = "";
+    el("verCob")?.addEventListener("click", (e) => { e.preventDefault(); document.querySelector('.seg button[data-modo="cobertura"]').click(); });
+  }
+
   function render() {
+    resumoVendedor();
     if (state.modo === "cobertura") return renderCobertura();
     const rows = filtrar();
     const lojas = new Set(rows.map((r) => r.codcli)).size;
