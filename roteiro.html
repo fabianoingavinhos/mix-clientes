@@ -84,7 +84,7 @@
             <button data-modo="dia" class="on">Dia</button>
             <button data-modo="semana">Semana</button>
             <button data-modo="todos">Todas as lojas</button>
-            ${VEND ? "" : `<button data-modo="cobertura">Cobertura</button>`}
+            <button data-modo="cobertura">${VEND ? "Roteirização" : "Cobertura"}</button>
           </div>
           <button class="btn ghost sm" id="btnPrev" title="Dia anterior">◀</button>
           <input type="date" id="fData">
@@ -92,7 +92,7 @@
           <button class="btn ghost sm" id="btnHoje">Hoje</button>
           <select id="fPromotor" ${VEND ? 'style="display:none"' : ""}><option value="">Todos os promotores</option></select>
           ${isVendedor ? "" : `<select id="fVendedor"><option value="">Todos os vendedores</option></select>`}
-          <select id="fCob" style="display:none"><option value="nao">Lojas não atendidas</option><option value="sim">Lojas atendidas</option><option value="todas">Todas as lojas cadastradas</option></select>
+          <select id="fCob" style="display:none"><option value="nao">${VEND ? "Lojas sem rota" : "Lojas não atendidas"}</option><option value="sim">${VEND ? "Lojas roteirizadas" : "Lojas atendidas"}</option><option value="todas">Todas as lojas cadastradas</option></select>
           <input type="search" id="fQ" placeholder="Código, nome, fantasia ou cidade…">
         </div>
         <div id="resumoVend" class="msg info" style="margin:8px 0 0;display:none"></div>
@@ -193,7 +193,7 @@
   // ---------- cobertura (cadastradas x atendidas por promotor) ----------
   function cobertura() {
     const atend = new Map(); // codcli -> promotores
-    state.rows.forEach((r) => { if (r.proxima_visita) { if (!atend.has(r.codcli)) atend.set(r.codcli, new Set()); atend.get(r.codcli).add(r.promotor || "?"); } });
+    state.rows.forEach((r) => { if (r.proxima_visita) { if (!atend.has(r.codcli)) atend.set(r.codcli, new Set()); atend.get(r.codcli).add(VEND ? (r.dia_semana || fmtDate(r.proxima_visita)) : (r.promotor || "?")); } });
     const porVend = new Map();
     state.clientes.forEach((c) => {
       const k = c.cod_vendedor ?? 0;
@@ -218,20 +218,20 @@
     const pct = (a, t) => t ? Math.round(a / t * 100) : 0;
     el("kpis").innerHTML = `
       <div class="kpi"><div class="l">Lojas cadastradas</div><div class="v">${fmtInt.format(total)}</div><div class="s">${vends.length} ${vends.length === 1 ? "vendedor" : "vendedores"}</div></div>
-      <div class="kpi"><div class="l">Atendidas por promotor</div><div class="v">${fmtInt.format(atend)}</div><div class="s">${pct(atend, total)}% de cobertura</div></div>
-      <div class="kpi"><div class="l">Não atendidas</div><div class="v">${fmtInt.format(total - atend)}</div><div class="s">sem promotor no roteiro</div></div>`;
+      <div class="kpi"><div class="l">${VEND ? "Roteirizadas" : "Atendidas por promotor"}</div><div class="v">${fmtInt.format(atend)}</div><div class="s">${pct(atend, total)}% ${VEND ? "com rota" : "de cobertura"}</div></div>
+      <div class="kpi"><div class="l">${VEND ? "Sem rota" : "Não atendidas"}</div><div class="v">${fmtInt.format(total - atend)}</div><div class="s">${VEND ? "sem dia de visita do vendedor" : "sem promotor no roteiro"}</div></div>`;
     if (!total) { el("lista").innerHTML = `<div class="empty"><div>Nenhum cliente cadastrado na base do mix para este filtro.</div></div>`; return; }
     const lojas = lojasCobertura();
-    const tituloLista = state.cobFiltro === "nao" ? "Lojas não atendidas" : state.cobFiltro === "sim" ? "Lojas atendidas" : "Todas as lojas cadastradas";
+    const tituloLista = state.cobFiltro === "nao" ? (VEND ? "Lojas sem rota" : "Lojas não atendidas") : state.cobFiltro === "sim" ? (VEND ? "Lojas roteirizadas" : "Lojas atendidas") : "Todas as lojas cadastradas";
     el("lista").innerHTML = `
       ${isVendedor ? "" : `<div class="rt-group">
-        <h3>Cobertura por vendedor <span class="cnt">clique em um vendedor para ver só as lojas dele</span></h3>
+        <h3>${VEND ? "Roteirização" : "Cobertura"} por vendedor <span class="cnt">clique em um vendedor para ver só as lojas dele</span></h3>
         <div class="table-wrap cards"><table>
-          <thead><tr><th>Vendedor</th><th class="num">Cadastradas</th><th class="num">Atendidas</th><th class="num">Não atendidas</th><th>Cobertura</th></tr></thead>
+          <thead><tr><th>Vendedor</th><th class="num">Lojas totais</th><th class="num">${VEND ? "Roteirizadas" : "Atendidas"}</th><th class="num">${VEND ? "Sem rota" : "Não atendidas"}</th><th>${VEND ? "% roteirizado" : "Cobertura"}</th></tr></thead>
           <tbody>${vends.map((v) => `
             <tr class="cob-row ${state.cobVend === v.cod ? "cob-sel" : ""}" data-cod="${v.cod}">
               <td data-l="Vendedor"><b>${esc(v.vendedor)}</b> <span class="mono small">${v.cod}</span></td>
-              <td class="num" data-l="Cadastradas">${fmtInt.format(v.total)}</td>
+              <td class="num" data-l="Lojas totais">${fmtInt.format(v.total)}</td>
               <td class="num" data-l="Atendidas">${fmtInt.format(v.atendidas)}</td>
               <td class="num" data-l="Não atendidas"><b>${fmtInt.format(v.total - v.atendidas)}</b></td>
               <td data-l="Cobertura"><div class="row" style="gap:8px;align-items:center"><div class="cob-bar"><div style="width:${pct(v.atendidas, v.total)}%"></div></div><span class="badge ${pct(v.atendidas, v.total) >= 70 ? "ok" : pct(v.atendidas, v.total) >= 40 ? "warn" : "bad"}">${pct(v.atendidas, v.total)}%</span></div></td>
@@ -243,14 +243,14 @@
         <h3>${tituloLista} <span class="cnt">${fmtInt.format(lojas.length)} lojas${state.cobVend != null ? " · " + esc(vends.find((v) => v.cod === state.cobVend)?.vendedor || "") : ""}</span>
           ${state.cobVend != null ? `<button class="btn ghost sm" id="cobTodos">Todos os vendedores</button>` : ""}</h3>
         <div class="table-wrap cards"><table>
-          <thead><tr><th>Loja</th><th>Cidade</th>${isVendedor ? "" : "<th>Vendedor</th>"}<th>Situação</th><th>Promotor</th><th>Última compra</th></tr></thead>
+          <thead><tr><th>Loja</th><th>Cidade</th>${isVendedor ? "" : "<th>Vendedor</th>"}<th>Situação</th><th>${VEND ? "Dia de visita" : "Promotor"}</th><th>Última compra</th></tr></thead>
           <tbody>${lojas.slice(0, state.limite || PAGE_MAX).map((c) => `
             <tr>
               <td class="loja" data-l="Loja"><div class="desc">${linkCli(c, `<b>${esc(c.fantasia || c.cliente)}</b>`)}</div><div class="small">${esc(c.fantasia ? c.cliente : "")} <span class="mono">${c.codcli}</span></div></td>
               <td data-l="Cidade">${esc(c.cidade || "")}${c.uf ? "/" + esc(c.uf) : ""}</td>
               ${isVendedor ? "" : `<td data-l="Vendedor" class="small">${esc(c.vendedor || "")}</td>`}
-              <td data-l="Situação">${c._atendida ? `<span class="badge ok">atendida</span>` : `<span class="badge bad">não atendida</span>`}</td>
-              <td data-l="Promotor" class="small">${esc(c._promotores || "—")}</td>
+              <td data-l="Situação">${c._atendida ? `<span class="badge ok">${VEND ? "roteirizada" : "atendida"}</span>` : `<span class="badge bad">${VEND ? "sem rota" : "não atendida"}</span>`}</td>
+              <td data-l="${VEND ? "Dia de visita" : "Promotor"}" class="small">${esc(c._promotores || "—")}</td>
               <td data-l="Última compra">${fmtDate(c.ultima_compra)}</td>
             </tr>`).join("") || `<tr><td colspan="6" class="empty">Nenhuma loja neste filtro.</td></tr>`}
           </tbody>
@@ -273,12 +273,14 @@
 
   function resumoVendedor() {
     const box = el("resumoVend");
-    if (VEND || state.modo === "cobertura" || !state.clientes.length) { box.style.display = "none"; return; }
+    if (state.modo === "cobertura" || !state.clientes.length) { box.style.display = "none"; return; }
     const vends = cobertura().filter((v) => !state.vendedor || String(v.cod) === state.vendedor);
     const total = vends.reduce((s, v) => s + v.total, 0), at = vends.reduce((s, v) => s + v.atendidas, 0);
     const pct = total ? Math.round(at / total * 100) : 0;
     const quem = isVendedor ? "Você tem" : state.vendedor ? `<b>${esc(vends[0]?.vendedor || "")}</b> tem` : `${vends.length} vendedores têm`;
-    box.innerHTML = `${quem} <b>${fmtInt.format(total)}</b> clientes cadastrados · <b>${fmtInt.format(at)}</b> atendidos por promotor (${pct}%) · <b>${fmtInt.format(total - at)}</b> sem promotor`
+    box.innerHTML = VEND
+      ? `${quem} <b>${fmtInt.format(total)}</b> lojas no total · <b>${fmtInt.format(at)}</b> roteirizadas (${pct}%) · <b>${fmtInt.format(total - at)}</b> sem rota &nbsp;<a href="#" id="verCob" style="font-weight:600">ver lojas sem rota</a>`
+      : `${quem} <b>${fmtInt.format(total)}</b> clientes cadastrados · <b>${fmtInt.format(at)}</b> atendidos por promotor (${pct}%) · <b>${fmtInt.format(total - at)}</b> sem promotor`
       + (isVendedor ? "" : ` &nbsp;<a href="#" id="verCob" style="font-weight:600">ver cobertura</a>`);
     box.style.display = "";
     el("verCob")?.addEventListener("click", (e) => { e.preventDefault(); document.querySelector('.seg button[data-modo="cobertura"]').click(); });
@@ -353,9 +355,9 @@
     if (state.modo === "cobertura") {
       const lojas = lojasCobertura(); if (!lojas.length) return Mix.toast("Nada para exportar.", "err");
       const wb = XLSX.utils.book_new();
-      if (!isVendedor) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cobertura().map((v) => ({ "Cód. vendedor": v.cod, "Vendedor": v.vendedor, "Cadastradas": v.total, "Atendidas": v.atendidas, "Não atendidas": v.total - v.atendidas, "Cobertura %": v.total ? Math.round(v.atendidas / v.total * 100) : 0 }))), "Cobertura");
+      if (!isVendedor) XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(cobertura().map((v) => ({ "Cód. vendedor": v.cod, "Vendedor": v.vendedor, "Cadastradas": v.total, [VEND ? "Roteirizadas" : "Atendidas"]: v.atendidas, [VEND ? "Sem rota" : "Não atendidas"]: v.total - v.atendidas, [VEND ? "% roteirizado" : "Cobertura %"]: v.total ? Math.round(v.atendidas / v.total * 100) : 0 }))), "Cobertura");
       XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lojas.map((c) => ({ "Cód. cliente": c.codcli, "Cliente": c.cliente, "Fantasia": c.fantasia, "Cidade": c.cidade, "UF": c.uf, ...(isVendedor ? {} : { "Vendedor": c.vendedor, "Supervisor": c.supervisor }), "Situação": c._atendida ? "Atendida" : "Não atendida", "Promotor": c._promotores, "Última compra": fmtDate(c.ultima_compra) }))), "Lojas");
-      return XLSX.writeFile(wb, "cobertura_promotores.xlsx");
+      return XLSX.writeFile(wb, VEND ? "roteirizacao_vendedores.xlsx" : "cobertura_promotores.xlsx");
     }
     const rows = filtrar(); if (!rows.length) return Mix.toast("Nada para exportar.", "err");
     const data = rows.map((r) => ({
