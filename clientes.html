@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mix Clientes — Clientes</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="config.js"></script>
+<script src="common.js"></script>
+<style>
+  .rt-toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:14px 0 6px; }
+  .rt-toolbar select, .rt-toolbar input[type=search] { width:auto; flex:1 1 170px; max-width:280px; }
+  .rt-group { margin-top:18px; }
+  .rt-group h3 { margin:0 0 6px; font-size:15px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .rt-group h3 .cnt { font-weight:400; font-size:12px; opacity:.7; }
+  a.cli-link { color:inherit; text-decoration:none; }
+  a.cli-link:hover { text-decoration:underline; }
+  .matriz { display:grid; grid-template-columns:auto 1fr 1fr; gap:6px; margin:14px 0 4px; max-width:640px; }
+  .matriz .h { font-size:12px; font-weight:600; opacity:.7; text-transform:uppercase; letter-spacing:.03em; align-self:end; padding:4px 8px; }
+  .matriz .hl { font-size:12px; font-weight:600; opacity:.7; text-transform:uppercase; letter-spacing:.03em; align-self:center; padding:4px 8px; }
+  .matriz button { border:1px solid var(--border, #ddd); background:#fff; border-radius:10px; padding:12px 14px; text-align:left; cursor:pointer; font:inherit; }
+  .matriz button .v { font-size:22px; font-weight:700; }
+  .matriz button .s { font-size:12px; opacity:.7; }
+  .matriz button.on { border-color:var(--brand, #7a1f2b); background:#fbf3f4; box-shadow:0 0 0 2px rgba(122,31,43,.15); }
+  tr.cob-row { cursor:pointer; }
+  tr.cob-sel td { background:#fbf3f4; }
+  .cob-bar { height:8px; background:#eee; border-radius:4px; overflow:hidden; min-width:90px; }
+  .cob-bar > div { height:100%; background:var(--brand, #7a1f2b); }
+  @media (max-width:720px) { .matriz { max-width:none; } .matriz button .v { font-size:19px; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+(async () => {
+  const { sb, fmtInt, fmtDate, esc, el, statusClass } = Mix;
+  const ctx = await Mix.requireAuth();
+  const p = ctx.profile;
+  const root = el("root");
+  const isVendedor = p.role === "vendedor";
+  const restrito = Mix.protegerDados(p);
+  const PAGE_MAX = restrito ? 25 : 500;
+
+  const scope = p.role === "admin" ? "Todos os clientes da base"
+    : p.role === "supervisor" ? `Clientes da sua equipe (supervisor ${p.cod_supervisor ?? "—"})`
+    : `Seus clientes (vendedor ${p.cod_vendedor ?? "—"})`;
+
+  // "sem venda" = sem compra há mais de N dias ou nunca comprou (N ajustável)
+  let state = { clientes: [], roteiro: [], dias: 90, venda: "", atend: "", vendedor: "", q: "", limite: null, cobVend: null };
+
+  root.innerHTML = Mix.renderTopbar(p, "clientes") + `
+    <div class="wrap">
+      <div class="card card-pad">
+        <div class="client-head">
+          <div>
+            <h1>Clientes: vendas × atendimento</h1>
+            <p class="sub" style="margin:0">${esc(scope)} · <span id="metaInfo" class="muted"></span></p>
+          </div>
+          <div class="row">${restrito ? "" : `<button class="btn ghost sm" id="btnExport">⬇ Exportar Excel</button>`}</div>
+        </div>
+
+        <div class="rt-toolbar">
+          <select id="fDias" title="Critério de 'sem venda'">
+            <option value="30">Sem venda = +30 dias sem comprar</option>
+            <option value="60">Sem venda = +60 dias sem comprar</option>
+            <option value="90" selected>Sem venda = +90 dias sem comprar</option>
+            <option value="180">Sem venda = +180 dias sem comprar</option>
+            <option value="365">Sem venda = +365 dias sem comprar</option>
+            <option value="nunca">Sem venda = nunca comprou</option>
+          </select>
+          ${isVendedor ? "" : `<select id="fVendedor"><option value="">Todos os vendedores</option></select>`}
+          <input type="search" id="fQ" placeholder="Código, nome, fantasia, cidade ou telefone…">
+        </div>
+
+        <div id="matriz"></div>
+        <div id="lista"></div>
+      </div>
+    </div>`;
+  Mix.bindTopbar();
+
+  // ---------- carga ----------
+  async function loadTable(table) {
+    const all = []; const PAGE = 1000;
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await sb.from(table).select("*").order("id").range(from, from + PAGE - 1);
+      if (error) throw error;
+      all.push(...(data || []));
+      if (!data || data.length < PAGE) break;
+    }
+    return all;
+  }
+  async function loadAll() {
+    el("lista").innerHTML = `<div class="empty"><span class="spinner dark"></span></div>`;
+    try {
+      const [cli, rot, { data: meta }] = await Promise.all([loadTable("clientes"), loadTable("roteiro"), sb.from("clientes_meta").select("*").eq("id", 1).maybeSingle()]);
+      state.clientes = cli; state.roteiro = rot;
+      if (meta?.atualizado_em) { const d = new Date(meta.atualizado_em); el("metaInfo").textContent = `base de clientes de ${d.toLocaleDateString("pt-BR")} ${d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`; }
+      else el("metaInfo").textContent = "nenhuma base de clientes carregada ainda";
+    } catch (e) {
+      el("lista").innerHTML = `<div class="msg err">${esc(e.message)}${/clientes/.test(e.message) ? " — a tabela de clientes ainda não existe: execute schema_clientes.sql no Supabase e carregue a planilha em Administração → Planilha de clientes." : ""}</div>`;
+      return;
+    }
+    // promotores por cliente (roteiro com próxima visita)
+    const atend = new Map();
+    state.roteiro.forEach((r) => { if (r.proxima_visita) { if (!atend.has(r.codcli)) atend.set(r.codcli, new Set()); atend.get(r.codcli).add(r.promotor || "?"); } });
+    state.clientes.forEach((c) => { c._atendido = atend.has(c.codcli); c._promotores = c._atendido ? [...atend.get(c.codcli)].join(", ") : ""; });
+    fillVendedores();
+    render();
+    sb.from("acessos").insert({ user_id: p.id, tipo: "clientes" }).then(() => {}, () => {});
+  }
+
+  function fillVendedores() {
+    const sel = el("fVendedor"); if (!sel) return;
+    const m = new Map(); state.clientes.forEach((c) => { if (c.cod_vendedor != null) m.set(c.cod_vendedor, c.vendedor); });
+    sel.innerHTML = `<option value="">Todos os vendedores</option>` + [...m.entries()].sort((a, b) => String(a[1]).localeCompare(String(b[1]), "pt-BR"))
+      .map(([c, n]) => `<option value="${c}">${esc(n || c)} (${c})</option>`).join("");
+  }
+
+  // ---------- regras ----------
+  const semVenda = (c) => state.dias === "nunca" ? !c.ultima_compra : (!c.ultima_compra || (c.dias_sem_comprar ?? 99999) > +state.dias);
+  function base() {
+    const q = state.q.trim().toLowerCase();
+    return state.clientes.filter((c) =>
+      (!state.vendedor || String(c.cod_vendedor) === state.vendedor) &&
+      (state.cobVend == null || c.cod_vendedor === state.cobVend) &&
+      (!q || String(c.codcli).includes(q) || (c.cliente || "").toLowerCase().includes(q) || (c.fantasia || "").toLowerCase().includes(q) || (c.cidade || "").toLowerCase().includes(q) || (c.telefone || "").includes(q) || (c.cnpj_cpf || "").includes(q)));
+  }
+  function filtrados() {
+    return base().filter((c) => (!state.venda || (state.venda === "sem") === semVenda(c)) && (!state.atend || (state.atend === "sim") === c._atendido))
+      .sort((a, b) => String(a.vendedor || "").localeCompare(String(b.vendedor || ""), "pt-BR") || ((b.dias_sem_comprar ?? 99999) - (a.dias_sem_comprar ?? 99999)));
+  }
+
+  // ---------- render ----------
+  const linkCli = (c, txt) => `<a class="cli-link" href="index.html?cli=${c.codcli}" title="Abrir mix do cliente">${txt}</a>`;
+  function badgeVenda(c) {
+    if (!c.ultima_compra) return `<span class="badge bad">nunca comprou</span>`;
+    return `<span class="badge ${statusClass(c.status_ultima_compra, c.dias_sem_comprar)}">${c.dias_sem_comprar} dias</span>`;
+  }
+
+  function render() {
+    const b = base();
+    const n = { cv_at: 0, cv_na: 0, sv_at: 0, sv_na: 0 };
+    b.forEach((c) => { n[(semVenda(c) ? "sv" : "cv") + "_" + (c._atendido ? "at" : "na")]++; });
+    const cv = n.cv_at + n.cv_na, sv = n.sv_at + n.sv_na, at = n.cv_at + n.sv_at, na = n.cv_na + n.sv_na;
+    const on = (v, a) => state.venda === v && state.atend === a ? "on" : "";
+    const cell = (v, a, val, sub) => `<button class="${on(v, a)}" data-v="${v}" data-a="${a}"><div class="v">${fmtInt.format(val)}</div><div class="s">${sub}</div></button>`;
+    const pct = (x, t) => t ? Math.round(x / t * 100) + "%" : "—";
+    el("matriz").innerHTML = `
+      <div class="kpis" style="margin:0">
+        <div class="kpi"><div class="l">Clientes</div><div class="v">${fmtInt.format(b.length)}</div><div class="s">${isVendedor ? "" : new Set(b.map((c) => c.cod_vendedor)).size + " vendedores"}</div></div>
+        <div class="kpi"><div class="l">Com venda</div><div class="v">${fmtInt.format(cv)}</div><div class="s">${pct(cv, b.length)} · compraram nos últimos ${state.dias === "nunca" ? "— (já compraram)" : state.dias + " dias"}</div></div>
+        <div class="kpi"><div class="l">Sem venda</div><div class="v">${fmtInt.format(sv)}</div><div class="s">${pct(sv, b.length)} · ${state.dias === "nunca" ? "nunca compraram" : "+" + state.dias + " dias ou nunca"}</div></div>
+        <div class="kpi"><div class="l">Atendidos por promotor</div><div class="v">${fmtInt.format(at)}</div><div class="s">${pct(at, b.length)} · ${fmtInt.format(na)} sem promotor</div></div>
+      </div>
+      <div class="matriz">
+        <div></div><div class="h">Atendido por promotor</div><div class="h">Sem promotor</div>
+        <div class="hl">Com venda</div>${cell("com", "sim", n.cv_at, "com venda · atendido")}${cell("com", "nao", n.cv_na, "com venda · sem promotor")}
+        <div class="hl">Sem venda</div>${cell("sem", "sim", n.sv_at, "sem venda · atendido ⚠")}${cell("sem", "nao", n.sv_na, "sem venda · sem promotor")}
+      </div>
+      <div class="row" style="gap:8px;margin:4px 0 0;flex-wrap:wrap">
+        <button class="btn ghost sm ${state.venda === "" && state.atend === "" ? "on" : ""}" data-v="" data-a="">Todos</button>
+        <button class="btn ghost sm" data-v="sem" data-a="">Todos sem venda</button>
+        <button class="btn ghost sm" data-v="" data-a="nao">Todos sem promotor</button>
+      </div>`;
+    el("matriz").querySelectorAll("button[data-v]").forEach((bt) => bt.addEventListener("click", () => {
+      const v = bt.dataset.v, a = bt.dataset.a;
+      if (state.venda === v && state.atend === a && (v || a)) { state.venda = ""; state.atend = ""; } else { state.venda = v; state.atend = a; }
+      state.limite = null; render();
+    }));
+
+    const lista = filtrados();
+    const titulo = (state.venda === "sem" ? "Clientes sem venda" : state.venda === "com" ? "Clientes com venda" : "Clientes") + (state.atend === "sim" ? " atendidos por promotor" : state.atend === "nao" ? " sem promotor" : "");
+    const lim = state.limite || PAGE_MAX;
+
+    let porVend = "";
+    if (!isVendedor && !state.vendedor && state.cobVend == null) {
+      const m = new Map();
+      b.forEach((c) => { const k = c.cod_vendedor ?? 0; if (!m.has(k)) m.set(k, { cod: k, nome: c.vendedor || "Sem vendedor", t: 0, sv: 0, na: 0 }); const v = m.get(k); v.t++; if (semVenda(c)) v.sv++; if (!c._atendido) v.na++; });
+      const vs = [...m.values()].sort((a, b2) => String(a.nome).localeCompare(String(b2.nome), "pt-BR"));
+      porVend = `<div class="rt-group">
+        <h3>Por vendedor <span class="cnt">clique para filtrar</span></h3>
+        <div class="table-wrap cards"><table>
+          <thead><tr><th>Vendedor</th><th class="num">Clientes</th><th class="num">Com venda</th><th class="num">Sem venda</th><th>% com venda</th><th class="num">Sem promotor</th></tr></thead>
+          <tbody>${vs.map((v) => `
+            <tr class="cob-row" data-cod="${v.cod}">
+              <td data-l="Vendedor"><b>${esc(v.nome)}</b> <span class="mono small">${v.cod}</span></td>
+              <td class="num" data-l="Clientes">${fmtInt.format(v.t)}</td>
+              <td class="num" data-l="Com venda">${fmtInt.format(v.t - v.sv)}</td>
+              <td class="num" data-l="Sem venda"><b>${fmtInt.format(v.sv)}</b></td>
+              <td data-l="% com venda"><div class="row" style="gap:8px;align-items:center"><div class="cob-bar"><div style="width:${v.t ? Math.round((v.t - v.sv) / v.t * 100) : 0}%"></div></div><span class="badge ${(v.t - v.sv) / v.t >= .7 ? "ok" : (v.t - v.sv) / v.t >= .4 ? "warn" : "bad"}">${v.t ? Math.round((v.t - v.sv) / v.t * 100) : 0}%</span></div></td>
+              <td class="num" data-l="Sem promotor">${fmtInt.format(v.na)}</td>
+            </tr>`).join("")}
+          </tbody>
+        </table></div>
+      </div>`;
+    }
+
+    el("lista").innerHTML = porVend + `
+      <div class="rt-group">
+        <h3>${titulo} <span class="cnt">${fmtInt.format(lista.length)} clientes${state.cobVend != null ? " · " + esc(b[0]?.vendedor || "") : ""}</span>
+          ${state.cobVend != null ? `<button class="btn ghost sm" id="cobTodos">Todos os vendedores</button>` : ""}</h3>
+        <div class="table-wrap cards"><table>
+          <thead><tr><th>Cliente</th><th>Cidade</th><th>Telefone</th>${isVendedor ? "" : "<th>Vendedor</th>"}<th>Última compra</th><th>Status</th><th>Promotor</th></tr></thead>
+          <tbody>${lista.slice(0, lim).map((c) => `
+            <tr>
+              <td class="loja" data-l="Cliente"><div class="desc">${linkCli(c, `<b>${esc(c.fantasia || c.cliente)}</b>`)}</div><div class="small">${esc(c.fantasia ? c.cliente : "")} <span class="mono">${c.codcli}</span></div></td>
+              <td data-l="Cidade">${esc(c.cidade || "")}${c.uf ? "/" + esc(c.uf) : ""}<div class="small">${esc(c.bairro || "")}</div></td>
+              <td data-l="Telefone" class="mono small">${esc(c.telefone || "—")}</td>
+              ${isVendedor ? "" : `<td data-l="Vendedor" class="small">${esc(c.vendedor || "")}</td>`}
+              <td data-l="Última compra">${fmtDate(c.ultima_compra)} ${badgeVenda(c)}</td>
+              <td data-l="Status" class="small">${esc(c.status_ultima_compra || "")}</td>
+              <td data-l="Promotor">${c._atendido ? `<span class="badge ok">atendido</span><div class="small">${esc(c._promotores)}</div>` : `<span class="badge gray">sem promotor</span>`}</td>
+            </tr>`).join("") || `<tr><td colspan="7" class="empty">Nenhum cliente neste filtro.</td></tr>`}
+          </tbody>
+        </table></div>
+        ${lista.length > lim ? `<div class="row" style="margin-top:8px;align-items:center;gap:10px"><button class="btn ghost sm" id="btnMais">Mostrar mais</button><span class="muted" style="font-size:12px">Mostrando ${fmtInt.format(lim)} de ${fmtInt.format(lista.length)}</span></div>` : ""}
+      </div>`;
+    el("lista").querySelectorAll("tr.cob-row").forEach((tr) => tr.addEventListener("click", () => { state.cobVend = +tr.dataset.cod; state.limite = null; render(); }));
+    el("cobTodos")?.addEventListener("click", () => { state.cobVend = null; state.limite = null; render(); });
+    el("btnMais")?.addEventListener("click", () => { state.limite = lim + PAGE_MAX; render(); });
+  }
+
+  // ---------- exportação (supervisor/admin) ----------
+  function exportExcel() {
+    const lista = filtrados(); if (!lista.length) return Mix.toast("Nada para exportar.", "err");
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lista.map((c) => ({
+      "Cód. cliente": c.codcli, "Cliente": c.cliente, "Fantasia": c.fantasia, "CNPJ/CPF": c.cnpj_cpf, "Telefone": c.telefone,
+      "Endereço": [c.endereco, c.numero].filter(Boolean).join(", "), "Bairro": c.bairro, "Cidade": c.cidade, "UF": c.uf,
+      "Vendedor": c.vendedor, "Supervisor": c.supervisor,
+      "Última compra": fmtDate(c.ultima_compra), "Dias sem comprar": c.dias_sem_comprar ?? "", "Status": c.status_ultima_compra,
+      "Situação de venda": semVenda(c) ? "Sem venda" : "Com venda", "Atendimento": c._atendido ? "Atendido por promotor" : "Sem promotor", "Promotor": c._promotores,
+    }))), "Clientes");
+    XLSX.writeFile(wb, `clientes_${state.venda || "todos"}_${state.atend || "todos"}.xlsx`);
+  }
+
+  // ---------- eventos ----------
+  el("fDias").addEventListener("change", (e) => { state.dias = e.target.value; state.limite = null; render(); });
+  el("fVendedor")?.addEventListener("change", (e) => { state.vendedor = e.target.value; state.cobVend = null; state.limite = null; render(); });
+  let t; el("fQ").addEventListener("input", (e) => { clearTimeout(t); t = setTimeout(() => { state.q = e.target.value; state.limite = null; render(); }, 200); });
+  el("btnExport")?.addEventListener("click", exportExcel);
+
+  loadAll();
+})();
+</script>
+</body>
+</html>
+

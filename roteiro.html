@@ -108,9 +108,16 @@
       if (!data || data.length < PAGE) break;
     }
     state.rows = all;
-    // Clientes cadastrados (base do mix, já filtrada pela permissão do usuário)
-    const { data: cli } = await sb.rpc("buscar_clientes", { q: "", limite: 100000 });
-    state.clientes = cli || [];
+    // Clientes cadastrados: base de clientes (aba Clientes); se não houver, usa os clientes do mix
+    let cli = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await sb.from("clientes").select("codcli,cliente,fantasia,cidade,uf,cod_vendedor,vendedor,cod_supervisor,supervisor,ultima_compra,dias_sem_comprar").order("id").range(from, from + PAGE - 1);
+      if (error || !data) { cli = []; break; }
+      cli.push(...data);
+      if (data.length < PAGE) break;
+    }
+    if (!cli.length) { const { data } = await sb.rpc("buscar_clientes", { q: "", limite: 100000 }); cli = data || []; }
+    state.clientes = cli;
     fillSelects();
     render();
     sb.from("acessos").insert({ user_id: p.id, tipo: "roteiro" }).then(() => {}, () => {});

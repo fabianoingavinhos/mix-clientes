@@ -27,12 +27,14 @@
         <button class="active" data-tab="users">Usuários</button>
         <button data-tab="upload">Planilha do mix</button>
         <button data-tab="roteiro">Planilha do roteiro</button>
+        <button data-tab="clientes">Planilha de clientes</button>
         <button data-tab="equipe">Equipe na base</button>
         <button data-tab="uso">Uso</button>
       </div>
       <div id="tab-users"></div>
       <div id="tab-upload" hidden></div>
       <div id="tab-roteiro" hidden></div>
+      <div id="tab-clientes" hidden></div>
       <div id="tab-equipe" hidden></div>
       <div id="tab-uso" hidden></div>
     </div>`;
@@ -40,7 +42,7 @@
 
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
-    ["users", "upload", "roteiro", "equipe", "uso"].forEach((t) => el("tab-" + t).hidden = t !== b.dataset.tab);
+    ["users", "upload", "roteiro", "clientes", "equipe", "uso"].forEach((t) => el("tab-" + t).hidden = t !== b.dataset.tab);
     if (b.dataset.tab === "equipe") loadEquipe();
     if (b.dataset.tab === "uso") loadUso();
   }));
@@ -548,6 +550,153 @@
   }
 
   // =====================================================================
+  //  UPLOAD DA PLANILHA DE CLIENTES (base cadastral)
+  // =====================================================================
+  const CL_MAP = {
+    cod_supervisor: "cod_supervisor", supervisor: "supervisor", cod_rca: "cod_vendedor", rca: "vendedor", cod_vendedor: "cod_vendedor", vendedor: "vendedor",
+    codcli: "codcli", cliente: "cliente", fantasia: "fantasia", cnpj_cpf: "cnpj_cpf", endereco: "endereco", numero: "numero", bairro: "bairro", cidade: "cidade", uf: "uf",
+    telefone: "telefone", data_ultima_compra: "ultima_compra", ultima_compra: "ultima_compra", dias_sem_compra: "dias_sem_comprar", dias_sem_comprar: "dias_sem_comprar",
+    status_ultima_compra: "status_ultima_compra", qtd_clientes_rca: "qtd_clientes_rca", qtd_clientes_supervisor: "qtd_clientes_supervisor",
+  };
+  const CL_ORDER = ["cod_supervisor","supervisor","cod_rca","rca","codcli","cliente","fantasia","cnpj_cpf","endereco","numero","bairro","cidade","uf","telefone",
+    "data_ultima_compra","dias_sem_compra","status_ultima_compra","qtd_clientes_rca","qtd_clientes_supervisor"];
+  const CL_INT = new Set(["cod_supervisor","cod_vendedor","codcli","dias_sem_comprar","qtd_clientes_rca","qtd_clientes_supervisor"]);
+  const CL_DATE = new Set(["ultima_compra"]);
+
+  let parsedCl = null;
+
+  async function renderClientes() {
+    const { data: meta } = await sb.from("clientes_meta").select("*").eq("id", 1).maybeSingle();
+    el("tab-clientes").innerHTML = `
+      <div class="card card-pad" style="margin-bottom:16px">
+        <h2>Base de clientes atual</h2>
+        ${meta?.atualizado_em
+          ? `<p class="sub" style="margin:0">Última atualização em <b>${new Date(meta.atualizado_em).toLocaleString("pt-BR")}</b> — ${fmtInt.format(meta.linhas)} clientes (${esc(meta.arquivo || "")})</p>`
+          : `<p class="sub" style="margin:0">Nenhuma base de clientes carregada ainda. <span class="muted">Se aparecer erro ao carregar, execute o arquivo <span class="mono">schema_clientes.sql</span> no SQL Editor do Supabase.</span></p>`}
+      </div>
+      <div class="card card-pad">
+        <h2>Carregar nova base de clientes</h2>
+        <div class="msg info" style="margin:0 0 14px">
+          <b>Origem:</b> relatório de <b>clientes</b> exportado em <b>.csv</b> com cabeçalho (COD_SUPERVISOR, COD_RCA, CODCLI, CLIENTE, FANTASIA, TELEFONE, DATA_ULTIMA_COMPRA, STATUS_ULTIMA_COMPRA…). Um cliente por linha; a base atual é <b>substituída</b>.
+        </div>
+        <p class="sub">Alimenta a aba <b>Clientes</b> (com venda × sem venda × atendimento de promotor) e a visão de <b>Cobertura</b> do roteiro. Mesma permissão do mix: vendedor vê os clientes do seu COD_RCA; supervisor os do seu COD_SUPERVISOR.</p>
+        <div class="dropzone" id="clDrop">
+          <input type="file" id="clFile" accept=".xlsx,.xls,.csv" hidden>
+          <div><b>Clique para escolher</b> ou arraste o arquivo aqui</div>
+          <div style="font-size:13px;margin-top:4px">xlsx · xls · csv</div>
+        </div>
+        <div id="clInfo" style="margin-top:14px"></div>
+        <div class="progress" id="clProg" hidden><div></div></div>
+        <div id="clMsg"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn" id="clImport" disabled>Substituir base de clientes</button>
+          <span class="muted" id="clStatus" style="font-size:13px"></span>
+        </div>
+      </div>`;
+    const drop = el("clDrop"), file = el("clFile");
+    drop.addEventListener("click", () => file.click());
+    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) handleClientesFile(e.dataTransfer.files[0]); });
+    file.addEventListener("change", () => file.files[0] && handleClientesFile(file.files[0]));
+    el("clImport").addEventListener("click", importClientes);
+  }
+
+  function parseClientesRows(raw) {
+    const first = (raw[0] || []).map(normHeader);
+    const hasHeader = first.some((h) => CL_MAP[h]) && isNaN(parseInt(String(raw[0][0]), 10));
+    const idx = {};
+    if (hasHeader) first.forEach((h, i) => { const c = CL_MAP[h]; if (c && idx[c] == null) idx[c] = i; });
+    else {
+      const ncols = (raw[0] || []).length;
+      if (ncols < CL_ORDER.length) throw new Error(`Arquivo sem cabeçalho com ${ncols} colunas — esperado ${CL_ORDER.length} na ordem padrão, ou uma linha de cabeçalho.`);
+      CL_ORDER.forEach((h, i) => { const c = CL_MAP[h]; if (c && idx[c] == null) idx[c] = i; });
+    }
+    const missing = ["codcli", "cliente", "cod_vendedor", "cod_supervisor"].filter((c) => idx[c] == null);
+    if (missing.length) throw new Error("Colunas obrigatórias não encontradas: " + missing.join(", ").toUpperCase());
+    const found = Object.keys(idx), rows = [], seen = new Set();
+    for (let i = hasHeader ? 1 : 0; i < raw.length; i++) {
+      const r = raw[i]; if (!r || r[idx.codcli] == null || r[idx.codcli] === "") continue;
+      const o = {};
+      for (const c of found) {
+        let v = r[idx[c]];
+        if (CL_INT.has(c)) v = toInt(v);
+        else if (CL_DATE.has(c)) v = toDate(v);
+        else { v = v == null ? null : String(v).trim(); if (v === "") v = null; }
+        o[c] = v;
+      }
+      if (o.codcli == null || seen.has(o.codcli)) continue; // um cliente por linha
+      seen.add(o.codcli); rows.push(o);
+    }
+    return { rows, found, semCabecalho: !hasHeader };
+  }
+
+  function handleClientesFile(f) {
+    parsedCl = null; el("clImport").disabled = true;
+    showMsg(el("clMsg"), ""); el("clInfo").innerHTML = `<span class="spinner dark"></span> Lendo ${esc(f.name)}…`;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const raw = readRaw(f, e.target.result);
+        if (raw.length < 1) throw new Error("Planilha vazia.");
+        const { rows, found, semCabecalho } = parseClientesRows(raw);
+        if (!rows.length) throw new Error("Nenhuma linha válida encontrada.");
+        const vend = new Set(rows.map((r) => r.cod_vendedor)).size, sup = new Set(rows.map((r) => r.cod_supervisor)).size;
+        const nunca = rows.filter((r) => !r.ultima_compra).length;
+        parsedCl = { rows, name: f.name };
+        const ex = rows[0];
+        el("clInfo").innerHTML = `
+          <div class="kpis" style="margin:0">
+            <div class="kpi"><div class="l">Clientes</div><div class="v">${fmtInt.format(rows.length)}</div><div class="s">${fmtInt.format(nunca)} nunca compraram</div></div>
+            <div class="kpi"><div class="l">Vendedores</div><div class="v">${vend}</div></div>
+            <div class="kpi"><div class="l">Supervisores</div><div class="v">${sup}</div></div>
+          </div>
+          <div class="muted" style="font-size:13px;margin-top:8px">
+            ${semCabecalho ? "Arquivo sem cabeçalho — usada a ordem padrão. " : ""}Colunas reconhecidas: ${found.length}<br>
+            Conferência: <b>${esc(ex.fantasia || ex.cliente)}</b> · vendedor ${esc(ex.vendedor || "")} (${ex.cod_vendedor}) · supervisor ${ex.cod_supervisor ?? "—"} · última compra ${ex.ultima_compra || "—"} · ${esc(ex.status_ultima_compra || "")}
+          </div>`;
+        el("clImport").disabled = false;
+      } catch (err) {
+        el("clInfo").innerHTML = ""; showMsg(el("clMsg"), err.message, "err");
+      }
+    };
+    reader.readAsArrayBuffer(f);
+  }
+
+  async function importClientes() {
+    if (!parsedCl) return;
+    const btn = el("clImport"); btn.disabled = true;
+    const prog = el("clProg"), bar = prog.firstElementChild, st = el("clStatus");
+    prog.hidden = false; bar.style.width = "0%"; showMsg(el("clMsg"), "");
+    try {
+      st.textContent = "Limpando base atual…";
+      let { error } = await sb.rpc("admin_limpar_clientes"); if (error) throw error;
+      const rows = parsedCl.rows, BATCH = 500;
+      for (let i = 0; i < rows.length; i += BATCH) {
+        const chunk = rows.slice(i, i + BATCH);
+        let tries = 0;
+        while (true) {
+          const { error } = await sb.from("clientes").insert(chunk);
+          if (!error) break;
+          if (++tries >= 3) throw error;
+          await new Promise((r) => setTimeout(r, 1200));
+        }
+        const done = Math.min(i + BATCH, rows.length);
+        bar.style.width = Math.round((done / rows.length) * 100) + "%";
+        st.textContent = `Enviando ${fmtInt.format(done)} / ${fmtInt.format(rows.length)} clientes…`;
+      }
+      ({ error } = await sb.rpc("admin_registrar_upload_clientes", { p_linhas: rows.length, p_arquivo: parsedCl.name })); if (error) throw error;
+      st.textContent = ""; showMsg(el("clMsg"), `Base de clientes atualizada com ${fmtInt.format(rows.length)} clientes.`, "ok");
+      toast("Clientes importados com sucesso.");
+      parsedCl = null;
+      setTimeout(renderClientes, 1500);
+    } catch (err) {
+      st.textContent = ""; showMsg(el("clMsg"), "Erro: " + err.message + " — a base pode estar incompleta; envie a planilha novamente.", "err");
+      btn.disabled = false;
+    }
+  }
+
+  // =====================================================================
   //  EQUIPE PRESENTE NA BASE
   // =====================================================================
   async function loadEquipe() {
@@ -631,7 +780,7 @@
             <tr>
               <td style="white-space:nowrap">${fmtDT(r.criado_em)}<div class="small muted">${tempoAtras(r.criado_em)}</div></td>
               <td><b>${esc(r.nome)}</b><div class="small muted">${esc(r.login)} · ${esc(ROLE_LABEL[r.role] || r.role)}</div></td>
-              <td>${r.tipo === "consulta" ? `<span class="badge brand">consulta</span>` : r.tipo === "roteiro" ? `<span class="badge warn">roteiro</span>` : `<span class="badge gray">acesso</span>`}</td>
+              <td>${r.tipo === "consulta" ? `<span class="badge brand">consulta</span>` : r.tipo === "roteiro" ? `<span class="badge warn">roteiro</span>` : r.tipo === "clientes" ? `<span class="badge warn">clientes</span>` : `<span class="badge gray">acesso</span>`}</td>
               <td>${r.codcli ? `<span class="mono">${r.codcli}</span> ${esc(r.cliente || "")}${r.fantasia ? ` <span class="muted">· ${esc(r.fantasia)}</span>` : ""}` : "—"}</td>
             </tr>`).join("") || `<tr><td colspan="4" class="empty">Nenhum registro ainda.</td></tr>`}
           </tbody>
@@ -661,6 +810,7 @@
   await loadUsers();
   renderUpload();
   renderRoteiro();
+  renderClientes();
 })();
 </script>
 </body>
