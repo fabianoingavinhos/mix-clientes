@@ -12,6 +12,23 @@
 <script src="config.js"></script>
 <script src="logo.js"></script>
 <script src="common.js"></script>
+<style>
+  .meta-box { margin:4px 0 10px; padding:12px 14px; border:1px solid var(--line); border-radius:10px; background:#fff; }
+  .meta-head { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:14px; }
+  .metas-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:10px; margin:10px 0 0; }
+  .mk { background:#fafbfc; border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .mk .l { color:var(--muted); font-size:11.5px; text-transform:uppercase; letter-spacing:.4px; }
+  .mk .v { font-size:17px; font-weight:700; margin-top:3px; }
+  .mk .v small { font-size:12px; font-weight:400; color:var(--muted); }
+  .mk .s { font-size:12.5px; margin-top:3px; }
+  .mk .bar { height:6px; background:#e9edf2; border-radius:4px; overflow:hidden; margin-top:6px; }
+  .mk .bar > div { height:100%; background:var(--brand); }
+  .mk.ok .bar > div { background:var(--ok); } .mk.ok .s { color:var(--ok); font-weight:600; }
+  .mk.warn .bar > div { background:var(--warn); } .mk.warn .s { color:var(--warn); }
+  .mk.bad .s { color:var(--bad); }
+  .msg.warn { background:var(--warn-soft); color:var(--warn); }
+  .msg .btn { vertical-align:middle; }
+</style>
 </head>
 <body>
 <div id="root"></div>
@@ -58,7 +75,7 @@
   // ---------------- APP ----------------
   const isVendedor = () => state.profile?.role === "vendedor";
   let restrito = false; // proteção anticópia ativa (vendedor): sem exportar mix, busca exige termo
-  let state = { profile: null, results: [], selected: null, mix: [], filter: "", status: "", sort: { key: "valor_total_comprado", dir: -1 }, pedido: {}, estoque: {} };
+  let state = { profile: null, results: [], selected: null, mix: [], filter: "", status: "", sort: { key: "valor_total_comprado", dir: -1 }, pedido: {}, estoque: {}, metas: new Map(), metaRef: null, vendas: [] };
 
   // Rascunho de pedido por cliente (fica salvo no navegador)
   const pedidoKey = (codcli) => `mix_pedido_${codcli}`;
@@ -101,6 +118,7 @@
     restrito = Mix.protegerDados(p);
     renderDetail();
     loadMeta();
+    loadMetas();
     registrar("acesso");
 
     const q = el("q");
@@ -126,6 +144,23 @@
       const d = new Date(data.atualizado_em);
       el("metaInfo").textContent = `base atualizada em ${d.toLocaleDateString("pt-BR")} ${d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
     } else el("metaInfo").textContent = "nenhuma planilha carregada ainda";
+  }
+
+  // Metas do mês (venda do ano passado + %): uma linha por cliente, usada na lista e no detalhe
+  async function loadMetas() {
+    const { data, error } = await sb.rpc("metas_clientes");
+    if (error || !data) return; // schema_metas.sql ainda não executado ou sem dados
+    state.metas = new Map(data.map((r) => [r.codcli, { ...r, m: Mix.calcMeta(r) }]));
+    state.metaRef = data[0] ? { mes_atual: data[0].mes_atual, mes_base: data[0].mes_base, modo: data[0].modo } : null;
+    if (state.results.length) renderResults();
+    if (state.selected) { const box = el("metaBox"); if (box) box.outerHTML = renderMetaBox(); bindMetaBox(); }
+  }
+  function faltaBadge(codcli) {
+    const r = state.metas.get(codcli); if (!r) return "";
+    const m = r.m;
+    if (m.status === "batida") return `<span class="badge ok">meta batida</span>`;
+    if (m.status === "sem_base") return "";
+    return `<span class="badge ${Mix.metaBadge(m.status)}" title="${esc(m.msg)}">falta ${fmtBRL.format(m.falta.valor)}${m.falta.mix ? " · " + m.falta.mix + " mix" : ""}</span>`;
   }
 
   let lastQuery = null;
@@ -161,6 +196,7 @@
           <span>${c.produtos} itens</span>
           ${isVendedor() ? "" : `<span>${fmtBRL.format(c.valor_total || 0)}</span>`}
           ${state.profile.role !== "vendedor" ? `<span>· ${esc(c.vendedor || "")}</span>` : ""}
+          ${faltaBadge(c.codcli)}
         </div>
       </button>`).join("") + (state.results.length >= (restrito ? 30 : 80) ? `<div class="muted" style="text-align:center;font-size:12px;padding:6px">Mostrando ${restrito ? 30 : 80} primeiros — refine a busca</div>` : "");
     box.querySelectorAll(".result").forEach((b) => b.addEventListener("click", () => selectClient(+b.dataset.cod)));
@@ -183,7 +219,104 @@
     }, () => {});
     registrar("consulta", codcli);
     ({ pedido: state.pedido, estoque: state.estoque } = loadPedido(codcli));
+    state.vendas = [];
+    sb.from("vendas").select("origem,codprod,descricao,embalagem,unidade,fornecedor,mes,qtd,valor").eq("codcli", codcli).limit(5000).then(({ data: vd }) => {
+      if (state.selected?.codcli !== codcli) return;
+      state.vendas = vd || [];
+      const b = el("pbMeta"); if (b) b.disabled = !state.vendas.length;
+    }, () => {});
     renderDetail();
+  }
+
+  // ---------- Meta do cliente (venda do mesmo mês do ano passado + %) ----------
+  function renderMetaBox() {
+    if (!state.selected) return "";
+    const r = state.metas.get(state.selected.codcli);
+    const ref = state.metaRef;
+    if (!r) return state.metas.size ? `<div id="metaBox" class="meta-box"><div class="msg info" style="margin:0">Sem venda deste cliente no ano passado nem no mês atual — sem meta calculada.</div></div>` : `<div id="metaBox"></div>`;
+    const m = r.m, pct = Mix.METAS_PCT;
+    const item = (label, meta, real, fmt, pctLabel) => {
+      const falta = Math.max(0, meta - real), p = meta > 0 ? real / meta : (real > 0 ? 1 : 0);
+      const cls = meta <= 0 ? "" : falta <= 0 ? "ok" : p >= 0.8 ? "warn" : "bad";
+      return `<div class="mk ${cls}"><div class="l">${label} <span class="muted">(+${pctLabel}%)</span></div>
+        <div class="v">${fmt(real)} <small>/ ${fmt(meta)}</small></div>
+        <div class="s">${meta <= 0 ? "sem base" : falta <= 0 ? "✔ batida" : `falta <b>${fmt(falta)}</b>`}</div>
+        <div class="bar"><div style="width:${Math.min(100, Math.round(p * 100))}%"></div></div></div>`;
+    };
+    return `<div id="metaBox" class="meta-box">
+      <div class="meta-head"><b>🎯 Meta de ${esc(Mix.nomeMes(r.mes_atual))}</b>
+        <span class="muted">base: ${r.modo === "mes" ? "venda de " + esc(Mix.nomeMes(r.mes_base)) : r.modo === "media" ? "média mensal do ano passado" : "—"}</span>
+        <a href="metas.html" class="muted" style="margin-left:auto;font-size:12.5px">ver todas as metas →</a></div>
+      <div class="metas-grid">
+        ${item("Financeiro", m.meta.valor, m.real.valor, (v) => fmtBRL.format(v), pct.valor)}
+        ${item("Quantidade", m.meta.qtd, m.real.qtd, (v) => fmtInt.format(v), pct.qtd)}
+        ${item("Mix", m.meta.mix, m.real.mix, (v) => fmtInt.format(v), pct.mix)}
+      </div>
+      <div class="msg ${m.status === "batida" ? "ok" : m.status === "quase" ? "warn" : "info"}" style="margin:8px 0 0">${esc(m.msg)}${m.status !== "batida" && m.status !== "sem_base" ? ` <button class="btn sm" id="metaSugerir" style="margin-left:8px">🎯 Sugerir pedido pela meta</button>` : ""}</div>
+    </div>`;
+  }
+  function bindMetaBox() { el("metaSugerir")?.addEventListener("click", sugerirPelaMeta); }
+
+  /**
+   * Monta a sugestão de pedido a partir da meta: para cada produto vendido no mês base do ano passado,
+   * alvo = qtd × (1 + %qtd), descontado o que já foi comprado no mês atual; se ainda faltar mix,
+   * completa com os produtos mais vendidos ao cliente nos outros meses do ano passado.
+   */
+  function montarSugestaoMeta() {
+    const r = state.metas.get(state.selected.codcli); if (!r) return null;
+    const pct = Mix.METAS_PCT, m = r.m;
+    const hist = state.vendas.filter((v) => v.origem === "hist"), atual = state.vendas.filter((v) => v.origem === "atual" && v.mes === r.mes_atual);
+    const nMeses = new Set(hist.map((v) => v.mes)).size || 1;
+    const base = new Map(); // codprod -> { qtd, valor, info }
+    const addBase = (v, div) => { const e = base.get(v.codprod) || { qtd: 0, valor: 0, info: v }; e.qtd += (+v.qtd || 0) / div; e.valor += (+v.valor || 0) / div; base.set(v.codprod, e); };
+    if (r.modo === "mes") hist.filter((v) => v.mes === r.mes_base).forEach((v) => addBase(v, 1)); else hist.forEach((v) => addBase(v, nMeses));
+    const compradoMes = new Map(); atual.forEach((v) => compradoMes.set(v.codprod, (compradoMes.get(v.codprod) || 0) + (+v.qtd || 0)));
+    const itens = []; // { codprod, qtd, motivo, info }
+    for (const [codprod, e] of base) {
+      if (e.qtd <= 0) continue;
+      const alvo = Math.ceil(e.qtd * (1 + pct.qtd / 100) - 1e-9), falta = alvo - (compradoMes.get(codprod) || 0);
+      if (falta > 0) itens.push({ codprod, qtd: falta, motivo: "ano passado", info: e.info });
+    }
+    // Completa o mix com produtos de outros meses do ano passado
+    const cobertos = new Set([...compradoMes.keys()].filter((c) => compradoMes.get(c) > 0)); itens.forEach((i) => cobertos.add(i.codprod));
+    let faltaMix = m.meta.mix - cobertos.size;
+    if (faltaMix > 0) {
+      const outros = new Map();
+      hist.forEach((v) => { if (cobertos.has(v.codprod) || (+v.qtd || 0) <= 0) return; const e = outros.get(v.codprod) || { qtd: 0, valor: 0, meses: 0, info: v }; e.qtd += +v.qtd; e.valor += +v.valor || 0; e.meses++; outros.set(v.codprod, e); });
+      [...outros.entries()].sort((a, b) => b[1].valor - a[1].valor).slice(0, faltaMix)
+        .forEach(([codprod, e]) => itens.push({ codprod, qtd: Math.max(1, Math.ceil(e.qtd / e.meses)), motivo: "completar mix", info: e.info }));
+    }
+    return { itens, r };
+  }
+
+  function sugerirPelaMeta() {
+    if (!state.vendas.length) return Mix.toast("Ainda carregando as vendas deste cliente — tente novamente em instantes.", "err");
+    const sug = montarSugestaoMeta();
+    if (!sug || !sug.itens.length) return Mix.toast("Nada a sugerir: o que foi comprado no mês já cobre a meta deste cliente.", "ok");
+    const { itens, r } = sug;
+    const nAno = itens.filter((i) => i.motivo === "ano passado").length, nMix = itens.length - nAno, unid = itens.reduce((s, i) => s + i.qtd, 0);
+    const foraMix = itens.filter((i) => !state.mix.some((x) => x.codprod === i.codprod)).length;
+    Mix.openModal(`
+      <h3>Sugerir pedido pela meta</h3>
+      <p class="sub" style="margin:0 0 10px">${esc(r.m.msg)}</p>
+      <p class="sub" style="margin:0 0 10px">Serão sugeridos <b>${itens.length} produtos</b> (${fmtInt.format(unid)} unidades): <b>${nAno}</b> comprados em ${esc(Mix.nomeMes(r.mes_base) || "ano passado")} com <b>+${Mix.METAS_PCT.qtd}%</b>, descontando o já comprado neste mês${nMix ? `, e <b>${nMix}</b> dos outros meses do ano passado para completar o mix` : ""}.${foraMix ? ` ${foraMix} deles não estão no mix atual e serão incluídos na lista.` : ""}</p>
+      <div class="field"><label>Quantidades já digitadas</label>
+        <select id="metaSubst"><option value="1">Substituir pelas da meta</option><option value="0">Manter (só preencher vazias)</option></select></div>
+      <div class="actions"><button class="btn ghost" data-close>Cancelar</button><button class="btn" id="metaOk">Aplicar</button></div>`);
+    el("metaOk").onclick = () => {
+      const subst = el("metaSubst").value === "1";
+      let n = 0;
+      if (subst) state.pedido = {};
+      for (const i of itens) {
+        if (!subst && state.pedido[i.codprod] > 0) continue;
+        if (!state.mix.some((x) => x.codprod === i.codprod)) {
+          state.mix.push({ codcli: state.selected.codcli, codprod: i.codprod, descricao: i.info.descricao, embalagem: i.info.embalagem, unidade: i.info.unidade, fornecedor: i.info.fornecedor, status_ultima_compra: "ANO PASSADO (meta)", _extra: true });
+        }
+        state.pedido[i.codprod] = i.qtd; n++;
+      }
+      savePedido(); Mix.closeModal(); renderTable(); updatePedidoBar();
+      Mix.toast(`${n} produtos sugeridos pela meta. Revise as quantidades antes de enviar.`);
+    };
   }
 
   function renderDetail() {
@@ -232,6 +365,8 @@
           <div class="kpi"><div class="l">Última compra</div><div class="v">${fmtDate(ultima)}</div><div class="s">${ultima ? diasDesde(ultima) + " dias atrás" : ""}</div></div>
         </div>
 
+        ${renderMetaBox()}
+
         <div class="toolbar">
           <input type="search" id="fMix" placeholder="${isVendedor() ? "Filtrar produto…" : "Filtrar produto ou fornecedor…"}" value="${esc(state.filter)}">
           <label class="chk" title="Mostra só código, produto, estoque e quantidade sugerida"><input type="checkbox" id="fList" ${listMode ? "checked" : ""}> Apenas listagem</label>
@@ -252,6 +387,7 @@
           <div class="pb-info">📝 <b>Sugestão de pedido:</b> <span id="pbItens">0</span> itens · <span id="pbUnid">0</span> unidades</div>
           <div class="pb-actions">
             <button class="btn ghost sm" id="pbCalc" title="Sugere quantidades a partir do histórico de compras">✨ Calcular sugestão</button>
+            ${state.metas.get(state.selected.codcli) ? `<button class="btn ghost sm" id="pbMeta" title="Monta o pedido para bater a meta do mês" ${state.vendas.length ? "" : "disabled"}>🎯 Pela meta</button>` : ""}
             <button class="btn sm" id="pbExcel">Excel</button>
             <button class="btn sm" id="pbPdf">PDF</button>
             <button class="btn ghost sm" id="pbLimpar">Limpar</button>
@@ -283,6 +419,8 @@
     el("pbPdf").addEventListener("click", exportPedidoPdf);
     el("pbLimpar").addEventListener("click", () => { state.pedido = {}; savePedido(); renderTable(); updatePedidoBar(); });
     el("pbCalc").addEventListener("click", abrirCalculo);
+    el("pbMeta")?.addEventListener("click", sugerirPelaMeta);
+    bindMetaBox();
     updatePedidoBar();
     el("btnBack").addEventListener("click", () => { el("grid").classList.remove("has-sel"); state.selected = null; state.mix = []; renderResults(); renderDetail(); });
     el("fSort").addEventListener("change", (e) => { const [k, d] = e.target.value.split("|"); state.sort = { key: k, dir: +d }; renderTable(); });

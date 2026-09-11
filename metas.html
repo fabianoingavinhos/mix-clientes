@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mix Clientes — Metas</title>
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="config.js"></script>
+<script src="common.js"></script>
+<style>
+  .rt-toolbar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:14px 0 6px; }
+  .rt-toolbar select, .rt-toolbar input[type=search] { width:auto; flex:1 1 170px; max-width:280px; }
+  .metas-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(210px, 1fr)); gap:12px; margin:14px 0 6px; }
+  .mk { background:#fafbfc; border:1px solid var(--line); border-radius:10px; padding:12px 14px; }
+  .mk .l { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.4px; }
+  .mk .v { font-size:20px; font-weight:700; margin-top:4px; }
+  .mk .v small { font-size:13px; font-weight:400; color:var(--muted); }
+  .mk .s { font-size:12.5px; margin-top:4px; }
+  .mk .bar { height:8px; background:#e9edf2; border-radius:4px; overflow:hidden; margin-top:8px; }
+  .mk .bar > div { height:100%; background:var(--brand); }
+  .mk.ok .bar > div { background:var(--ok); } .mk.ok .s { color:var(--ok); font-weight:600; }
+  .mk.warn .bar > div { background:var(--warn); } .mk.warn .s { color:var(--warn); }
+  .mk.bad .s { color:var(--bad); }
+  .msg.meta-msg { font-size:15px; }
+  .msg.info { background:#eef3fb; color:#1f3d6e; }
+  .msg.warn { background:var(--warn-soft); color:var(--warn); }
+  a.cli-link { color:inherit; text-decoration:none; }
+  a.cli-link:hover { text-decoration:underline; }
+  .cob-bar { height:8px; background:#eee; border-radius:4px; overflow:hidden; min-width:80px; }
+  .cob-bar > div { height:100%; background:var(--brand); }
+  tr.batida .cob-bar > div { background:var(--ok); }
+  th.num, td.num { text-align:right; }
+  .falta b { color:var(--bad); }
+  .legend { display:flex; gap:10px; flex-wrap:wrap; font-size:12.5px; color:var(--muted); margin:6px 0 0; }
+  .vend-tab { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0 4px; }
+  .vend-tab button { border:1px solid var(--line); background:#fff; border-radius:999px; padding:5px 12px; cursor:pointer; font:inherit; font-size:13px; }
+  .vend-tab button.on { border-color:var(--brand); background:var(--brand-soft); color:var(--brand); font-weight:600; }
+  @media (max-width:720px) { .mk .v { font-size:18px; } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+(async () => {
+  const { sb, fmtBRL, fmtInt, fmtNum, esc, el, calcMeta, metaBadge, metaLabel, metaDe, METAS_PCT, nomeMes } = Mix;
+  const ctx = await Mix.requireAuth();
+  const p = ctx.profile;
+  const root = el("root");
+  const isVendedor = p.role === "vendedor";
+  const restrito = Mix.protegerDados(p);
+
+  const scope = p.role === "admin" ? "Todos os vendedores da base"
+    : p.role === "supervisor" ? `Vendedores da sua equipe (supervisor ${p.cod_supervisor ?? "—"})`
+    : `Seus clientes (vendedor ${p.cod_vendedor ?? "—"})`;
+
+  let state = { rows: [], vendedor: isVendedor ? String(p.cod_vendedor) : "", q: "", status: "", sort: { key: "falta_valor", dir: -1 } };
+
+  root.innerHTML = Mix.renderTopbar(p, "metas") + `
+    <div class="wrap">
+      <div class="card card-pad">
+        <div class="client-head">
+          <div>
+            <h1>Metas do mês</h1>
+            <p class="sub" style="margin:0">${esc(scope)} · <span id="refInfo" class="muted"></span></p>
+          </div>
+          <div class="row">${restrito ? "" : `<button class="btn ghost sm" id="btnExport">⬇ Exportar Excel</button>`}</div>
+        </div>
+        <div id="vendTabs"></div>
+        <div id="resumo"></div>
+        <div class="rt-toolbar">
+          <input type="search" id="fQ" placeholder="Código, nome, fantasia ou cidade…">
+          <select id="fStatus">
+            <option value="">Todos os clientes</option>
+            <option value="falta">Faltando para a meta</option>
+            <option value="quase">Quase lá (≥ 80%)</option>
+            <option value="batida">Meta batida</option>
+            <option value="sem_base">Sem venda no ano passado</option>
+          </select>
+          <span class="muted" id="countInfo" style="font-size:13px"></span>
+        </div>
+        <div id="lista"></div>
+      </div>
+    </div>`;
+  Mix.bindTopbar();
+  sb.from("acessos").insert({ user_id: p.id, tipo: "metas" }).then(() => {}, () => {});
+
+  // ---------- Carga ----------
+  const { data, error } = await sb.rpc("metas_clientes");
+  if (error) { el("lista").innerHTML = `<div class="msg err">${esc(error.message)}${/metas_clientes/.test(error.message) ? " — execute o schema_metas.sql no Supabase." : ""}</div>`; return; }
+  state.rows = (data || []).map((r) => ({ ...r, m: calcMeta(r) }));
+  const ref = state.rows[0];
+  if (!state.rows.length) {
+    el("refInfo").textContent = "nenhuma venda carregada";
+    el("lista").innerHTML = `<div class="empty">Nenhum dado de venda carregado ainda. ${p.role === "admin" ? 'Carregue os relatórios 8238 e 8239 em <a href="admin.html">Administração → Metas (vendas)</a>.' : "Peça ao administrador para carregar os relatórios de venda."}</div>`;
+    return;
+  }
+  el("refInfo").innerHTML = `mês atual <b>${nomeMes(ref.mes_atual)}</b> · base ${ref.modo === "mes" ? `<b>${nomeMes(ref.mes_base)}</b>` : ref.modo === "media" ? "<b>média mensal</b> do ano passado (o mês correspondente não está na planilha)" : "<b>sem venda do ano passado</b>"}`;
+
+  // ---------- Vendedores ----------
+  const vendedores = [...new Map(state.rows.filter((r) => r.cod_vendedor != null).map((r) => [r.cod_vendedor, r.vendedor || String(r.cod_vendedor)])).entries()]
+    .sort((a, b) => a[1].localeCompare(b[1], "pt-BR"));
+  if (!isVendedor) {
+    el("vendTabs").innerHTML = `<div class="vend-tab">
+      <button data-v="" class="${state.vendedor === "" ? "on" : ""}">Todos</button>
+      ${vendedores.map(([c, n]) => `<button data-v="${c}" class="${state.vendedor === String(c) ? "on" : ""}">${esc(n)}</button>`).join("")}
+    </div>`;
+    el("vendTabs").querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
+      state.vendedor = b.dataset.v;
+      el("vendTabs").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+      render();
+    }));
+  }
+
+  function rowsDoVendedor() { return state.vendedor === "" ? state.rows : state.rows.filter((r) => String(r.cod_vendedor) === state.vendedor); }
+
+  // ---------- Resumo (meta do vendedor / equipe) ----------
+  function renderResumo() {
+    const rows = rowsDoVendedor();
+    const soma = (f) => rows.reduce((s, r) => s + (+f(r) || 0), 0);
+    const meta = { valor: soma((r) => r.m.meta.valor), qtd: soma((r) => r.m.meta.qtd), mix: soma((r) => r.m.meta.mix) };
+    const real = { valor: soma((r) => r.m.real.valor), qtd: soma((r) => r.m.real.qtd), mix: soma((r) => r.m.real.mix) };
+    const baseCli = rows.filter((r) => +r.base_valor > 0).length, realCli = rows.filter((r) => +r.real_valor > 0).length;
+    const metaCli = metaDe(baseCli, METAS_PCT.clientes, true);
+    const nome = state.vendedor === "" ? (isVendedor ? p.nome : "Equipe") : (vendedores.find(([c]) => String(c) === state.vendedor)?.[1] || "Vendedor");
+    const card = (label, metaV, realV, fmt, unidade, pctLabel) => {
+      const falta = Math.max(0, metaV - realV), pct = metaV > 0 ? realV / metaV : (realV > 0 ? 1 : 0);
+      const cls = metaV <= 0 ? "" : falta <= 0 ? "ok" : pct >= 0.8 ? "warn" : "bad";
+      return `<div class="mk ${cls}">
+        <div class="l">${label} <span class="muted">(${pctLabel})</span></div>
+        <div class="v">${fmt(realV)} <small>/ ${fmt(metaV)}</small></div>
+        <div class="s">${metaV <= 0 ? "sem base no ano passado" : falta <= 0 ? "✔ meta batida" : `faltam <b>${fmt(falta)}</b>${unidade}`}</div>
+        <div class="bar"><div style="width:${Math.min(100, Math.round(pct * 100))}%"></div></div>
+      </div>`;
+    };
+    const faltas = [];
+    if (meta.valor - real.valor > 0) faltas.push(fmtBRL.format(meta.valor - real.valor));
+    if (meta.qtd - real.qtd > 0) faltas.push(`${fmtInt.format(meta.qtd - real.qtd)} unidades`);
+    if (meta.mix - real.mix > 0) faltas.push(`${fmtInt.format(meta.mix - real.mix)} itens de mix`);
+    if (metaCli - realCli > 0) faltas.push(`${fmtInt.format(metaCli - realCli)} clientes atendidos`);
+    const pctV = meta.valor > 0 ? real.valor / meta.valor : 0;
+    const msg = meta.valor <= 0 ? `<div class="msg info meta-msg">Sem venda no ano passado para calcular a meta.</div>`
+      : !faltas.length ? `<div class="msg ok meta-msg">🎉 <b>${esc(nome)}</b> bateu a meta do mês em todos os indicadores!</div>`
+      : pctV >= 0.8 ? `<div class="msg warn meta-msg"><b>${esc(nome)}</b>, você quase atingiu a meta: faltam <b>${faltas.join("</b>, <b>")}</b>.</div>`
+      : `<div class="msg info meta-msg">Para <b>${esc(nome)}</b> bater a meta do mês faltam <b>${faltas.join("</b>, <b>")}</b>.</div>`;
+    el("resumo").innerHTML = `
+      <div class="metas-grid">
+        ${card("Financeiro", meta.valor, real.valor, (v) => fmtBRL.format(v), "", `+${METAS_PCT.valor}%`)}
+        ${card("Quantidade", meta.qtd, real.qtd, (v) => fmtInt.format(v), " unid.", `+${METAS_PCT.qtd}%`)}
+        ${card("Mix (itens × clientes)", meta.mix, real.mix, (v) => fmtInt.format(v), " itens", `+${METAS_PCT.mix}%`)}
+        ${card("Clientes atendidos", metaCli, realCli, (v) => fmtInt.format(v), " clientes", `+${METAS_PCT.clientes}%`)}
+      </div>
+      ${msg}
+      <div class="legend"><span>Meta = venda do ano passado + crescimento.</span><span>Realizado = mês atual (Relatório 8239).</span><span>Mix = soma dos produtos distintos comprados por cliente.</span><span>Clientes atendidos = clientes com venda no mês.</span></div>`;
+  }
+
+  // ---------- Lista de clientes ----------
+  const COLS = [
+    { key: "cliente", label: "Cliente" },
+    { key: "base_valor", label: "Ano passado", num: true },
+    { key: "meta_valor", label: "Meta R$", num: true },
+    { key: "real_valor", label: "Realizado", num: true },
+    { key: "falta_valor", label: "Falta R$", num: true },
+    { key: "pct", label: "% da meta", num: true },
+    { key: "falta_qtd", label: "Falta unid.", num: true },
+    { key: "falta_mix", label: "Falta mix", num: true },
+    { key: "status", label: "Situação" },
+  ];
+  const pick = (r, k) => k === "meta_valor" ? r.m.meta.valor : k === "falta_valor" ? r.m.falta.valor : k === "pct" ? r.m.pct
+    : k === "falta_qtd" ? r.m.falta.qtd : k === "falta_mix" ? r.m.falta.mix : k === "status" ? r.m.status : k === "cliente" ? (r.fantasia || r.cliente) : r[k];
+
+  function filtered() {
+    const q = state.q.trim().toLowerCase();
+    let rows = rowsDoVendedor().filter((r) =>
+      (!state.status || r.m.status === state.status) &&
+      (!q || String(r.codcli) === q || (r.cliente || "").toLowerCase().includes(q) || (r.fantasia || "").toLowerCase().includes(q) || (r.cidade || "").toLowerCase().includes(q)));
+    const { key, dir } = state.sort;
+    rows.sort((a, b) => {
+      const va = pick(a, key), vb = pick(b, key);
+      if (typeof va === "number" || typeof vb === "number") return ((+va || 0) - (+vb || 0)) * dir;
+      return String(va || "").localeCompare(String(vb || ""), "pt-BR") * dir;
+    });
+    return rows;
+  }
+
+  function renderLista() {
+    const rows = filtered();
+    el("countInfo").textContent = `${rows.length} de ${rowsDoVendedor().length} clientes`;
+    const mostraVend = !isVendedor && state.vendedor === "";
+    el("lista").innerHTML = `
+      <div class="table-wrap"><table>
+        <thead><tr>${COLS.map((c) => `<th class="${c.num ? "num" : ""}" data-key="${c.key}">${c.label}${state.sort.key === c.key ? `<span class="arrow">${state.sort.dir > 0 ? "▲" : "▼"}</span>` : ""}</th>`).join("")}</tr></thead>
+        <tbody>${rows.map((r) => {
+          const m = r.m;
+          return `<tr class="${m.status}">
+            <td><a class="cli-link" href="index.html?cli=${r.codcli}" title="Abrir o mix e a sugestão de pedido"><b>${esc(r.fantasia || r.cliente)}</b></a>
+              <div class="small"><span class="mono">${r.codcli}</span> · ${esc(r.fantasia ? r.cliente : "")}${r.cidade ? " · " + esc(r.cidade) : ""}${mostraVend ? " · " + esc(r.vendedor || "") : ""}</div>
+              <div class="small" style="color:${m.status === "batida" ? "var(--ok)" : m.status === "quase" ? "var(--warn)" : "inherit"}">${esc(m.msg)}</div></td>
+            <td class="num">${fmtBRL.format(+r.base_valor || 0)}<div class="small">${fmtInt.format(+r.base_qtd || 0)} un · ${r.base_mix} itens</div></td>
+            <td class="num"><b>${fmtBRL.format(m.meta.valor)}</b><div class="small">${fmtInt.format(m.meta.qtd)} un · ${m.meta.mix} itens</div></td>
+            <td class="num">${fmtBRL.format(m.real.valor)}<div class="small">${fmtInt.format(m.real.qtd)} un · ${m.real.mix} itens</div></td>
+            <td class="num falta">${m.falta.valor > 0 ? `<b>${fmtBRL.format(m.falta.valor)}</b>` : "—"}</td>
+            <td class="num"><div class="cob-bar"><div style="width:${Math.min(100, Math.round(m.pct * 100))}%"></div></div><div class="small">${m.meta.valor > 0 ? Math.round(m.pct * 100) + "%" : "—"}</div></td>
+            <td class="num">${m.falta.qtd > 0 ? fmtInt.format(m.falta.qtd) : "—"}</td>
+            <td class="num">${m.falta.mix > 0 ? m.falta.mix : "—"}</td>
+            <td><span class="badge ${metaBadge(m.status)}">${metaLabel[m.status]}</span></td>
+          </tr>`; }).join("") || `<tr><td colspan="9" class="empty">Nenhum cliente</td></tr>`}
+        </tbody>
+      </table></div>`;
+    el("lista").querySelectorAll("th").forEach((th) => th.addEventListener("click", () => {
+      const k = th.dataset.key;
+      state.sort = state.sort.key === k ? { key: k, dir: -state.sort.dir } : { key: k, dir: COLS.find((c) => c.key === k).num ? -1 : 1 };
+      renderLista();
+    }));
+  }
+
+  function render() { renderResumo(); renderLista(); }
+
+  function exportExcel() {
+    const rows = filtered();
+    const data = rows.map((r) => ({
+      "Cód.": r.codcli, "Cliente": r.cliente, "Fantasia": r.fantasia || "", "Cidade": r.cidade || "", "Vendedor": r.vendedor || "", "Cód. vendedor": r.cod_vendedor,
+      "Ano passado R$": +r.base_valor || 0, "Ano passado unid.": +r.base_qtd || 0, "Ano passado mix": r.base_mix,
+      "Meta R$": r.m.meta.valor, "Meta unid.": r.m.meta.qtd, "Meta mix": r.m.meta.mix,
+      "Realizado R$": r.m.real.valor, "Realizado unid.": r.m.real.qtd, "Realizado mix": r.m.real.mix,
+      "Falta R$": r.m.falta.valor, "Falta unid.": r.m.falta.qtd, "Falta mix": r.m.falta.mix, "% da meta": Math.round(r.m.pct * 100), "Situação": metaLabel[r.m.status],
+    }));
+    const ws = XLSX.utils.json_to_sheet(data);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Metas");
+    XLSX.writeFile(wb, `metas_${String(ref.mes_atual).slice(0, 7)}${state.vendedor ? "_vend" + state.vendedor : ""}.xlsx`);
+  }
+
+  let t;
+  el("fQ").addEventListener("input", (e) => { clearTimeout(t); t = setTimeout(() => { state.q = e.target.value; renderLista(); }, 200); });
+  el("fStatus").addEventListener("change", (e) => { state.status = e.target.value; renderLista(); });
+  el("btnExport")?.addEventListener("click", exportExcel);
+  render();
+})();
+</script>
+</body>
+</html>

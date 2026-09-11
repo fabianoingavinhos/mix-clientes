@@ -80,6 +80,7 @@
       `<a href="roteiro.html" class="${active === "roteiro" ? "active" : ""}">Roteiro promotor</a>`,
       `<a href="roteiro.html?tipo=vendedor" class="${active === "roteiro_vendedor" ? "active" : ""}">Roteiro vendedor</a>`,
       `<a href="clientes.html" class="${active === "clientes" ? "active" : ""}">Clientes</a>`,
+      `<a href="metas.html" class="${active === "metas" ? "active" : ""}">Metas</a>`,
       profile.role === "admin" ? `<a href="admin.html" class="${active === "admin" ? "active" : ""}">Administração</a>` : "",
     ].join("");
     return `
@@ -175,6 +176,39 @@
     return true;
   }
 
+  // ---------------- METAS (venda do ano passado + % de crescimento) ----------------
+  // Percentuais em config.js (METAS: { valor, qtd, mix, clientes }); padrão 15 / 15 / 20 / 15.
+  const METAS_PCT = Object.assign({ valor: 15, qtd: 15, mix: 20, clientes: 15 }, cfg.METAS || {});
+  const fmtMes = (d) => { if (!d) return "—"; const [y, m] = String(d).slice(0, 10).split("-"); return `${m}/${y}`; };
+  const NOME_MES = ["janeiro","fevereiro","março","abril","maio","junho","julho","agosto","setembro","outubro","novembro","dezembro"];
+  const nomeMes = (d) => { if (!d) return "—"; const [y, m] = String(d).slice(0, 10).split("-"); return `${NOME_MES[+m - 1]}/${y}`; };
+  const metaDe = (base, pct, inteiro) => { const v = (+base || 0) * (1 + pct / 100); return inteiro ? Math.ceil(v - 1e-9) : Math.round(v * 100) / 100; };
+  /**
+   * Calcula a meta de um cliente (linha de metas_clientes) e o que falta.
+   * status: "sem_base" (sem venda no ano passado), "batida", "quase" (>= 80%), "falta".
+   */
+  function calcMeta(r) {
+    const meta = { valor: metaDe(r.base_valor, METAS_PCT.valor), qtd: metaDe(r.base_qtd, METAS_PCT.qtd, true), mix: metaDe(r.base_mix, METAS_PCT.mix, true) };
+    const real = { valor: +r.real_valor || 0, qtd: +r.real_qtd || 0, mix: +r.real_mix || 0 };
+    const falta = { valor: Math.max(0, meta.valor - real.valor), qtd: Math.max(0, meta.qtd - real.qtd), mix: Math.max(0, meta.mix - real.mix) };
+    const pct = meta.valor > 0 ? real.valor / meta.valor : (real.valor > 0 ? 1 : 0);
+    const batida = meta.valor > 0 && falta.valor <= 0 && falta.qtd <= 0 && falta.mix <= 0;
+    let status = meta.valor <= 0 ? "sem_base" : batida ? "batida" : pct >= 0.8 ? "quase" : "falta";
+    const partes = [];
+    if (falta.valor > 0) partes.push(fmtBRL.format(falta.valor));
+    if (falta.qtd > 0) partes.push(`${fmtInt.format(falta.qtd)} unidades`);
+    if (falta.mix > 0) partes.push(`${falta.mix} ${falta.mix === 1 ? "produto" : "produtos"} no mix`);
+    const msg = status === "sem_base"
+      ? (real.valor > 0 ? "Cliente sem venda no mesmo mês do ano passado — tudo que comprar é crescimento." : "Sem venda no mesmo mês do ano passado — sem meta calculada.")
+      : status === "batida" ? "🎉 Meta deste cliente batida!"
+      : status === "quase" ? `Você quase atingiu a meta deste cliente: ${partes.length ? "faltam " + partes.join(", ") : "falta pouco"}.`
+      : `Para bater a meta deste cliente ${partes.length === 1 ? "falta" : "faltam"} ${partes.join(", ")}.`;
+    return { meta, real, falta, pct, status, msg };
+  }
+  const metaBadge = (status) => status === "batida" ? "ok" : status === "quase" ? "warn" : status === "falta" ? "bad" : "gray";
+  const metaLabel = { batida: "Meta batida", quase: "Quase lá", falta: "Falta", sem_base: "Sem base" };
+
   window.Mix = { sb, configured, cfg, fmtBRL, fmtNum, fmtInt, fmtDate, statusClass, esc, el, showMsg, ROLE_LABEL,
-    getSessionProfile, login, logout, requireAuth, renderTopbar, bindTopbar, openModal, closeModal, toast, protegerDados };
+    getSessionProfile, login, logout, requireAuth, renderTopbar, bindTopbar, openModal, closeModal, toast, protegerDados,
+    METAS_PCT, fmtMes, nomeMes, metaDe, calcMeta, metaBadge, metaLabel };
 })();

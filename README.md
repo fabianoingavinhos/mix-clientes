@@ -24,6 +24,8 @@ config.js           → URL e chave anon do Supabase  ← ÚNICO arquivo a edita
 style.css, common.js → estilos e funções compartilhadas
 schema.sql          → script que cria tudo no Supabase
 schema_roteiro.sql  → tabela e permissões do roteiro (executar depois do schema.sql)
+metas.html          → metas do mês por vendedor e por cliente
+schema_metas.sql    → tabela "vendas" e funções das metas (executar depois do schema.sql)
 ```
 
 ## Instalação (uma vez só, ~10 min)
@@ -93,3 +95,14 @@ A aba **Roteiro** mostra as lojas que cada promotor visita no dia (ou na semana)
 2. **Administração → Planilha do roteiro** → carregue o relatório da **rotina 8236** (promotores x dia de visita), exportado em .csv com cabeçalho (COD_SUPERVISOR, COD_RCA, COD_PROMOTOR, CODCLI, DATA_PROXIMA_VISITA, PERIODICIDADE…). O roteiro atual é substituído.
 
 A planilha traz só a **próxima** visita e a periodicidade (7/14/28 dias); as datas seguintes são calculadas (próxima + n × periodicidade), então dá para consultar qualquer dia futuro.
+
+## Metas do mês (venda do ano passado + crescimento)
+
+A aba **Metas** mostra, para cada vendedor, quanto falta para bater a meta do mês em quatro indicadores — **financeiro (+15%)**, **quantidade (+15%)**, **mix (+20%)** e **clientes atendidos (+15%)** — e a lista dos clientes com a meta de cada um (ano passado → meta → realizado → falta). Na **Consulta mix**, o cliente selecionado ganha um bloco "Meta do mês" com a mensagem ("para bater a meta deste cliente faltam R$ …, … unidades e … produtos no mix" / "você quase atingiu a meta" / "meta batida") e o botão **🎯 Sugerir pedido pela meta**, que preenche a quantidade sugerida com os produtos do mesmo mês do ano passado (+15%, descontando o que já foi comprado no mês) e completa o mix com os produtos mais vendidos nos outros meses. A lista de clientes mostra um selo com o que falta.
+
+Base = venda do **mesmo mês do ano anterior**; se esse mês não estiver na planilha, usa a média mensal dos meses carregados. Percentuais ajustáveis em `config.js` (`METAS: { valor, qtd, mix, clientes }`).
+
+1. Execute `schema_metas.sql` no SQL Editor do Supabase (uma vez).
+2. **Administração → Metas (vendas)** tem dois uploads:
+   - **Venda do ano passado (set, out, nov e dez)** → **Relatório 8238** em .csv (colunas QTD_LIQ_SET_2025, VLR_LIQ_SET_2025, … por mês).
+   - **Venda por cliente do mês atual** → **Relatório 8239** em .csv (MES_REFERENCIA, QTD_LIQUIDA, VALOR_VENDA_LIQUIDA). Recarregue sempre que quiser atualizar o "quanto falta".

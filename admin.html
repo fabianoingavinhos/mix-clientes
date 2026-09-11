@@ -27,12 +27,14 @@
         <button class="active" data-tab="users">Usuários</button>
         <button data-tab="upload">Planilha do mix</button>
         <button data-tab="rotas">Roteiros e clientes</button>
+        <button data-tab="metas">Metas (vendas)</button>
         <button data-tab="equipe">Equipe na base</button>
         <button data-tab="uso">Uso</button>
       </div>
       <div id="tab-users"></div>
       <div id="tab-upload" hidden></div>
       <div id="tab-rotas" hidden></div>
+      <div id="tab-metas" hidden></div>
       <div id="tab-equipe" hidden></div>
       <div id="tab-uso" hidden></div>
     </div>`;
@@ -40,7 +42,7 @@
 
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
-    ["users", "upload", "rotas", "equipe", "uso"].forEach((t) => el("tab-" + t).hidden = t !== b.dataset.tab);
+    ["users", "upload", "rotas", "metas", "equipe", "uso"].forEach((t) => el("tab-" + t).hidden = t !== b.dataset.tab);
     if (b.dataset.tab === "equipe") loadEquipe();
     if (b.dataset.tab === "uso") loadUso();
   }));
@@ -673,6 +675,181 @@
     }
   }
 
+
+  // =====================================================================
+  //  METAS: VENDA DO ANO PASSADO (Relatório 8238) E VENDA DO MÊS ATUAL (Relatório 8239)
+  //  Ambos viram linhas da tabela "vendas" (uma linha por cliente x produto x mês).
+  //  - 8238: colunas QTD_LIQ_<MES>_<ANO> / VLR_LIQ_<MES>_<ANO> para cada mês -> origem 'hist'
+  //  - 8239: MES_REFERENCIA + QTD_LIQUIDA / VALOR_VENDA_LIQUIDA               -> origem 'atual'
+  // =====================================================================
+  const VD_MAP = { cod_supervisor: "cod_supervisor", supervisor: "supervisor", cod_vendedor: "cod_vendedor", vendedor: "vendedor", cod_rca: "cod_vendedor", rca: "vendedor",
+    codcli: "codcli", cliente: "cliente", fantasia: "fantasia", cnpj_cpf: "cnpj_cpf", cidade: "cidade", uf: "uf",
+    codprod: "codprod", descricao: "descricao", embalagem: "embalagem", unidade: "unidade", codfornec: "codfornec", fornecedor: "fornecedor" };
+  const VD_INT = new Set(["cod_supervisor", "cod_vendedor", "codcli", "codprod", "codfornec"]);
+  const MESES_ABREV = { jan: 1, fev: 2, mar: 3, abr: 4, mai: 5, jun: 6, jul: 7, ago: 8, set: 9, out: 10, nov: 11, dez: 12 };
+  const mesIso = (y, m) => `${y}-${String(m).padStart(2, "0")}-01`;
+  const mesBR = (iso) => { const [y, m] = iso.split("-"); return `${m}/${y}`; };
+
+  function parseVendasRows(raw, origem) {
+    const first = (raw[0] || []).map(normHeader);
+    const hasHeader = first.includes("codcli") && first.includes("codprod") && isNaN(parseInt(String(raw[0][0]), 10));
+    if (!hasHeader) throw new Error("A planilha precisa vir com a linha de cabeçalho (COD_SUPERVISOR; SUPERVISOR; COD_VENDEDOR; VENDEDOR; CODCLI; …; CODPROD; …).");
+    const idx = {};
+    first.forEach((h, i) => { const c = VD_MAP[h]; if (c && idx[c] == null) idx[c] = i; });
+    const missing = ["codcli", "cliente", "cod_vendedor", "cod_supervisor", "codprod", "descricao"].filter((c) => idx[c] == null);
+    if (missing.length) throw new Error("Colunas obrigatórias não encontradas: " + missing.join(", ").toUpperCase());
+    // Colunas de mês
+    let meses = []; // { mes: 'YYYY-MM-01', iq, iv }
+    let iMesRef = -1, iQtd = -1, iVal = -1;
+    if (origem === "hist") {
+      first.forEach((h, i) => {
+        const m = h.match(/^(qtd|vlr)_liq_([a-z]{3})_(\d{4})$/);
+        if (!m || !MESES_ABREV[m[2]]) return;
+        const mes = mesIso(m[3], MESES_ABREV[m[2]]);
+        let e = meses.find((x) => x.mes === mes); if (!e) { e = { mes, iq: -1, iv: -1 }; meses.push(e); }
+        if (m[1] === "qtd") e.iq = i; else e.iv = i;
+      });
+      meses = meses.filter((e) => e.iq >= 0 && e.iv >= 0).sort((a, b) => a.mes.localeCompare(b.mes));
+      if (!meses.length) throw new Error("Não encontrei as colunas de mês (QTD_LIQ_SET_2025, VLR_LIQ_SET_2025, …). Confira se é o Relatório 8238.");
+    } else {
+      iMesRef = first.indexOf("mes_referencia"); iQtd = first.indexOf("qtd_liquida"); iVal = first.indexOf("valor_venda_liquida");
+      if (iQtd < 0) iQtd = first.indexOf("qtd_liq"); if (iVal < 0) iVal = first.indexOf("vlr_liq");
+      if (iMesRef < 0 || iQtd < 0 || iVal < 0) throw new Error("Não encontrei as colunas MES_REFERENCIA, QTD_LIQUIDA e VALOR_VENDA_LIQUIDA. Confira se é o Relatório 8239.");
+    }
+    const found = Object.keys(idx), rows = [], mesesSet = new Set();
+    for (let i = 1; i < raw.length; i++) {
+      const r = raw[i]; if (!r || r[idx.codcli] == null || r[idx.codcli] === "") continue;
+      const o = { origem };
+      for (const c of found) {
+        let v = r[idx[c]];
+        if (VD_INT.has(c)) v = toInt(v); else { v = v == null ? null : String(v).trim(); if (v === "") v = null; }
+        o[c] = v;
+      }
+      if (o.codcli == null || o.codprod == null) continue;
+      if (origem === "hist") {
+        for (const e of meses) {
+          const qtd = toNum(r[e.iq]) || 0, valor = toNum(r[e.iv]) || 0;
+          if (!qtd && !valor) continue; // só guarda meses com movimento
+          rows.push({ ...o, mes: e.mes, qtd, valor }); mesesSet.add(e.mes);
+        }
+      } else {
+        const ref = String(r[iMesRef] || "").trim(); let m = ref.match(/^(\d{2})\/(\d{4})$/), mes = null;
+        if (m) mes = mesIso(m[2], +m[1]); else { const d = toDate(ref); if (d) mes = d.slice(0, 8) + "01"; }
+        if (!mes) continue;
+        rows.push({ ...o, mes, qtd: toNum(r[iQtd]) || 0, valor: toNum(r[iVal]) || 0 }); mesesSet.add(mes);
+      }
+    }
+    return { rows, found, meses: [...mesesSet].sort() };
+  }
+
+  const parsedVd = { hist: null, atual: null };
+
+  async function renderMetas() {
+    const { data: metas } = await sb.from("vendas_meta").select("*");
+    const mh = (metas || []).find((m) => m.origem === "hist"), ma = (metas || []).find((m) => m.origem === "atual");
+    const linha = (m, rot) => m?.atualizado_em
+      ? `<div><b>${rot}:</b> ${new Date(m.atualizado_em).toLocaleString("pt-BR")} — ${fmtInt.format(m.linhas)} linhas · meses ${esc(m.meses || "—")} <span class="muted">(${esc(m.arquivo || "")})</span></div>`
+      : `<div><b>${rot}:</b> <span class="muted">nada carregado ainda</span></div>`;
+    const pct = Mix.METAS_PCT;
+    const bloco = (origem, titulo, obs, botao) => `
+      <div class="card card-pad" style="margin-bottom:16px">
+        <h2>${titulo}</h2>
+        <div class="msg info" style="margin:0 0 14px">${obs}</div>
+        <div class="dropzone" id="vdDrop_${origem}">
+          <input type="file" id="vdFile_${origem}" accept=".xlsx,.xls,.csv" hidden>
+          <div><b>Clique para escolher</b> ou arraste o arquivo aqui</div>
+          <div style="font-size:13px;margin-top:4px">csv (recomendado) · xlsx · xls</div>
+        </div>
+        <div id="vdInfo_${origem}" style="margin-top:14px"></div>
+        <div class="progress" id="vdProg_${origem}" hidden><div></div></div>
+        <div id="vdMsg_${origem}"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn" id="vdImport_${origem}" disabled>${botao}</button>
+          <span class="muted" id="vdStatus_${origem}" style="font-size:13px"></span>
+        </div>
+      </div>`;
+    el("tab-metas").innerHTML = `
+      <div class="card card-pad" style="margin-bottom:16px">
+        <h2>Situação atual</h2>
+        <div class="sub" style="margin:0;display:grid;gap:4px">
+          ${linha(mh, "Venda do ano passado (Relatório 8238)")}
+          ${linha(ma, "Venda do mês atual (Relatório 8239)")}
+        </div>
+        <p class="sub" style="margin:10px 0 0">A meta de cada cliente é a venda do <b>mesmo mês do ano passado</b> com <b>+${pct.valor}% financeiro</b>, <b>+${pct.qtd}% quantidade</b> e <b>+${pct.mix}% de mix</b>; a meta do vendedor soma as dos clientes e exige <b>+${pct.clientes}% de clientes atendidos</b>. O realizado vem do relatório do mês atual. Percentuais ajustáveis em <span class="mono">config.js</span> (METAS).</p>
+      </div>
+      ${bloco("hist", "1. Venda do ano passado — set, out, nov e dez",
+        `<b>Observação:</b> o relatório dos meses de <b>set, out, nov e dez</b> é o <b>Relatório 8238</b> — gere no sistema e salve em <b>.csv</b>. Tem uma coluna de quantidade e valor líquidos para cada mês (QTD_LIQ_SET_2025, VLR_LIQ_SET_2025, …). Ao carregar, a base do ano passado é <b>substituída</b>.`,
+        "Substituir venda do ano passado")}
+      ${bloco("atual", "2. Venda por cliente — mês atual",
+        `<b>Observação:</b> o relatório de <b>venda por cliente do mês atual</b> é o <b>Relatório 8239</b> — gere no sistema e salve em <b>.csv</b>. Tem as colunas MES_REFERENCIA, QTD_LIQUIDA e VALOR_VENDA_LIQUIDA. Carregue de novo sempre que quiser atualizar o "quanto falta" — a base do mês atual é <b>substituída</b>.`,
+        "Substituir venda do mês atual")}`;
+    for (const origem of ["hist", "atual"]) {
+      const drop = el("vdDrop_" + origem), file = el("vdFile_" + origem);
+      drop.addEventListener("click", () => file.click());
+      drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+      drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+      drop.addEventListener("drop", (e) => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) handleVdFile(origem, e.dataTransfer.files[0]); });
+      file.addEventListener("change", () => file.files[0] && handleVdFile(origem, file.files[0]));
+      el("vdImport_" + origem).addEventListener("click", () => importVd(origem));
+    }
+  }
+
+  function handleVdFile(origem, f) {
+    parsedVd[origem] = null; el("vdImport_" + origem).disabled = true;
+    showMsg(el("vdMsg_" + origem), ""); el("vdInfo_" + origem).innerHTML = `<span class="spinner dark"></span> Lendo ${esc(f.name)}…`;
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const raw = readRaw(f, e.target.result);
+        if (raw.length < 2) throw new Error("Planilha vazia.");
+        const header = (raw[0] || []).map(normHeader);
+        // Avisa se o arquivo parece ser do outro relatório
+        const pareceHist = header.some((h) => /^vlr_liq_[a-z]{3}_\d{4}$/.test(h)), pareceAtual = header.includes("mes_referencia");
+        if (origem === "hist" && !pareceHist && pareceAtual) throw new Error("Este arquivo parece ser o Relatório 8239 (mês atual). Carregue-o no bloco 2.");
+        if (origem === "atual" && !pareceAtual && pareceHist) throw new Error("Este arquivo parece ser o Relatório 8238 (ano passado). Carregue-o no bloco 1.");
+        const { rows, found, meses } = parseVendasRows(raw, origem);
+        if (!rows.length) throw new Error("Nenhuma linha com venda encontrada.");
+        parsedVd[origem] = { rows, name: f.name, meses };
+        const clientes = new Set(rows.map((r) => r.codcli)).size, vend = new Set(rows.map((r) => r.cod_vendedor)).size;
+        const valor = rows.reduce((s, r) => s + r.valor, 0);
+        const porMes = meses.map((m) => { const rr = rows.filter((r) => r.mes === m); return `${mesBR(m)}: ${new Set(rr.map((r) => r.codcli)).size} clientes · ${Mix.fmtBRL.format(rr.reduce((s, r) => s + r.valor, 0))}`; });
+        const ex = rows[0];
+        el("vdInfo_" + origem).innerHTML = `
+          <div class="kpis" style="margin:0">
+            <div class="kpi"><div class="l">Linhas com venda</div><div class="v">${fmtInt.format(rows.length)}</div><div class="s">${meses.length} ${meses.length === 1 ? "mês" : "meses"}</div></div>
+            <div class="kpi"><div class="l">Clientes</div><div class="v">${fmtInt.format(clientes)}</div><div class="s">${vend} vendedores</div></div>
+            <div class="kpi"><div class="l">Valor líquido</div><div class="v">${Mix.fmtBRL.format(valor)}</div></div>
+          </div>
+          <div class="muted" style="font-size:13px;margin-top:8px">${porMes.join("<br>")}<br>Colunas reconhecidas: ${found.length}. Conferência: <b>${esc(ex.cliente)}</b> · vendedor ${esc(ex.vendedor || "")} (${ex.cod_vendedor}) · ${esc(ex.descricao)} · ${mesBR(ex.mes)} · ${ex.qtd} unid. · ${Mix.fmtBRL.format(ex.valor)}</div>
+          ${origem === "atual" && meses.length > 1 ? `<div class="msg warn" style="margin-top:10px">O arquivo tem mais de um mês — o "mês atual" será o mais recente (${mesBR(meses[meses.length - 1])}).</div>` : ""}`;
+        el("vdImport_" + origem).disabled = false;
+      } catch (err) {
+        el("vdInfo_" + origem).innerHTML = ""; showMsg(el("vdMsg_" + origem), err.message, "err");
+      }
+    };
+    reader.readAsArrayBuffer(f);
+  }
+
+  async function importVd(origem) {
+    const p = parsedVd[origem]; if (!p) return;
+    const btn = el("vdImport_" + origem); btn.disabled = true;
+    const prog = el("vdProg_" + origem), bar = prog.firstElementChild, st = el("vdStatus_" + origem);
+    prog.hidden = false; bar.style.width = "0%"; showMsg(el("vdMsg_" + origem), "");
+    try {
+      st.textContent = "Limpando base atual…";
+      let { error } = await sb.rpc("admin_limpar_vendas", { p_origem: origem }); if (error) throw error;
+      await enviarLotes("vendas", p.rows, bar, st, origem === "hist" ? "venda do ano passado" : "venda do mês atual", 1000);
+      ({ error } = await sb.rpc("admin_registrar_upload_vendas", { p_origem: origem, p_linhas: p.rows.length, p_arquivo: p.name, p_meses: p.meses.map(mesBR).join(", ") })); if (error) throw error;
+      st.textContent = ""; showMsg(el("vdMsg_" + origem), `Base atualizada com ${fmtInt.format(p.rows.length)} linhas.`, "ok");
+      toast("Planilha importada.");
+      parsedVd[origem] = null;
+      setTimeout(renderMetas, 1500);
+    } catch (err) {
+      st.textContent = ""; showMsg(el("vdMsg_" + origem), "Erro: " + err.message + " — a base pode estar incompleta; envie a planilha novamente.", "err");
+      btn.disabled = false;
+    }
+  }
+
   // =====================================================================
   //  EQUIPE PRESENTE NA BASE
   // =====================================================================
@@ -787,6 +964,7 @@
   await loadUsers();
   renderUpload();
   renderRotas();
+  renderMetas();
 })();
 </script>
 </body>
