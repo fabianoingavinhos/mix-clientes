@@ -98,6 +98,9 @@
   }
 
   function bindTopbar() {
+    // No celular o menu rola de lado: deixa a aba ativa visível
+    const nav = document.querySelector(".topbar nav"), act = nav?.querySelector("a.active");
+    if (nav && act && nav.scrollWidth > nav.clientWidth) nav.scrollLeft += act.getBoundingClientRect().left - nav.getBoundingClientRect().left - (nav.clientWidth - act.offsetWidth) / 2;
     el("btnSair")?.addEventListener("click", logout);
     el("btnSenha")?.addEventListener("click", () => {
       openModal(`
