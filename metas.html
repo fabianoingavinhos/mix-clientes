@@ -129,7 +129,7 @@
       const falta = Math.max(0, metaV - realV), pct = metaV > 0 ? realV / metaV : (realV > 0 ? 1 : 0);
       const cls = metaV <= 0 ? "" : falta <= 0 ? "ok" : pct >= 0.8 ? "warn" : "bad";
       return `<div class="mk ${cls}">
-        <div class="l">${label} <span class="muted">(${pctLabel})</span></div>
+        <div class="l">${label}${isVendedor ? "" : ` <span class="muted">(${pctLabel})</span>`}</div>
         <div class="v">${fmt(realV)} <small>/ ${fmt(metaV)}</small></div>
         <div class="s">${metaV <= 0 ? "sem base no ano passado" : falta <= 0 ? "✔ meta batida" : `faltam <b>${fmt(falta)}</b>${unidade}`}</div>
         <div class="bar"><div style="width:${Math.min(100, Math.round(pct * 100))}%"></div></div>

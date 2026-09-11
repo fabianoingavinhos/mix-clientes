@@ -238,7 +238,7 @@
     const item = (label, meta, real, fmt, pctLabel) => {
       const falta = Math.max(0, meta - real), p = meta > 0 ? real / meta : (real > 0 ? 1 : 0);
       const cls = meta <= 0 ? "" : falta <= 0 ? "ok" : p >= 0.8 ? "warn" : "bad";
-      return `<div class="mk ${cls}"><div class="l">${label} <span class="muted">(+${pctLabel}%)</span></div>
+      return `<div class="mk ${cls}"><div class="l">${label}${isVendedor() ? "" : ` <span class="muted">(+${pctLabel}%)</span>`}</div>
         <div class="v">${fmt(real)} <small>/ ${fmt(meta)}</small></div>
         <div class="s">${meta <= 0 ? "sem base" : falta <= 0 ? "✔ batida" : `falta <b>${fmt(falta)}</b>`}</div>
         <div class="bar"><div style="width:${Math.min(100, Math.round(p * 100))}%"></div></div></div>`;
@@ -299,7 +299,7 @@
     Mix.openModal(`
       <h3>Sugerir pedido pela meta</h3>
       <p class="sub" style="margin:0 0 10px">${esc(r.m.msg)}</p>
-      <p class="sub" style="margin:0 0 10px">Serão sugeridos <b>${itens.length} produtos</b> (${fmtInt.format(unid)} unidades): <b>${nAno}</b> comprados em ${esc(Mix.nomeMes(r.mes_base) || "ano passado")} com <b>+${Mix.METAS_PCT.qtd}%</b>, descontando o já comprado neste mês${nMix ? `, e <b>${nMix}</b> dos outros meses do ano passado para completar o mix` : ""}.${foraMix ? ` ${foraMix} deles não estão no mix atual e serão incluídos na lista.` : ""}</p>
+      <p class="sub" style="margin:0 0 10px">Serão sugeridos <b>${itens.length} produtos</b> (${fmtInt.format(unid)} unidades): <b>${nAno}</b> comprados em ${esc(Mix.nomeMes(r.mes_base) || "ano passado")} ${isVendedor() ? "" : ` com <b>+${Mix.METAS_PCT.qtd}%</b>`}, descontando o já comprado neste mês${nMix ? `, e <b>${nMix}</b> dos outros meses do ano passado para completar o mix` : ""}.${foraMix ? ` ${foraMix} deles não estão no mix atual e serão incluídos na lista.` : ""}</p>
       <div class="field"><label>Quantidades já digitadas</label>
         <select id="metaSubst"><option value="1">Substituir pelas da meta</option><option value="0">Manter (só preencher vazias)</option></select></div>
       <div class="actions"><button class="btn ghost" data-close>Cancelar</button><button class="btn" id="metaOk">Aplicar</button></div>`);
