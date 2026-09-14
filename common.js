@@ -141,13 +141,23 @@
   }
 
   /**
-   * Proteção contra cópia para o perfil vendedor: bloqueia seleção de texto, botão direito,
+   * Proteção contra cópia para os perfis vendedor e supervisor: bloqueia seleção de texto, botão direito,
    * copiar/imprimir/salvar por teclado, impressão da página e aplica marca d'água com nome e data.
    * Não impede print/foto de tela — serve para dificultar cópia em massa e identificar a origem.
    * Retorna true se as restrições estão ativas (páginas usam isso para esconder botões de exportar).
    */
+  // Perfis com dados protegidos: vendedor e supervisor (somente o admin fica livre).
+  // Desligue caso a caso em config.js: PROTEGER_VENDEDOR: false / PROTEGER_SUPERVISOR: false.
+  // Usado também pelas telas para esconder valores e botões de exportar.
+  function perfilRestrito(profile) {
+    if (!profile) return false;
+    if (profile.role === "vendedor") return cfg.PROTEGER_VENDEDOR !== false;
+    if (profile.role === "supervisor") return cfg.PROTEGER_SUPERVISOR !== false;
+    return false;
+  }
+
   function protegerDados(profile) {
-    const restrito = !!profile && profile.role === "vendedor" && cfg.PROTEGER_VENDEDOR !== false;
+    const restrito = perfilRestrito(profile);
     if (!restrito) return false;
     const marca = `${profile.nome} · ${new Date().toLocaleDateString("pt-BR")} ${new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`;
     const st = document.createElement("style");
@@ -212,6 +222,6 @@
   const metaLabel = { batida: "Meta batida", quase: "Quase lá", falta: "Falta", sem_base: "Sem base" };
 
   window.Mix = { sb, configured, cfg, fmtBRL, fmtNum, fmtInt, fmtDate, statusClass, esc, el, showMsg, ROLE_LABEL,
-    getSessionProfile, login, logout, requireAuth, renderTopbar, bindTopbar, openModal, closeModal, toast, protegerDados,
+    getSessionProfile, login, logout, requireAuth, renderTopbar, bindTopbar, openModal, closeModal, toast, protegerDados, perfilRestrito,
     METAS_PCT, fmtMes, nomeMes, metaDe, calcMeta, metaBadge, metaLabel };
 })();

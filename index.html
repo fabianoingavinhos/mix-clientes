@@ -73,8 +73,9 @@
   }
 
   // ---------------- APP ----------------
-  const isVendedor = () => state.profile?.role === "vendedor";
-  let restrito = false; // proteção anticópia ativa (vendedor): sem exportar mix, busca exige termo
+  // Tela reduzida (sem valores, sem fornecedor, sem % de meta): vendedor e supervisor.
+  const telaVendedor = () => Mix.perfilRestrito(state.profile);
+  let restrito = false; // proteção anticópia ativa (vendedor/supervisor): sem exportar mix, busca exige termo
   let state = { profile: null, results: [], selected: null, mix: [], filter: "", status: "", sort: { key: "valor_total_comprado", dir: -1 }, pedido: {}, estoque: {}, metas: new Map(), metaRef: null, vendas: [] };
 
   // Rascunho de pedido por cliente (fica salvo no navegador)
@@ -91,7 +92,7 @@
 
   async function renderApp(ctx) {
     state.profile = ctx.profile;
-    if (isVendedor()) state.sort = { key: "dias_sem_comprar", dir: 1 };
+    if (telaVendedor()) state.sort = { key: "dias_sem_comprar", dir: 1 };
     const p = ctx.profile;
     const scope = p.role === "admin" ? "Todos os clientes da base"
       : p.role === "supervisor" ? `Clientes da sua equipe (supervisor ${p.cod_supervisor ?? "—"})`
@@ -194,7 +195,7 @@
           <span class="cod">${c.codcli}</span>
           <span>${esc(c.cidade || "")}${c.uf ? "/" + esc(c.uf) : ""}</span>
           <span>${c.produtos} itens</span>
-          ${isVendedor() ? "" : `<span>${fmtBRL.format(c.valor_total || 0)}</span>`}
+          ${telaVendedor() ? "" : `<span>${fmtBRL.format(c.valor_total || 0)}</span>`}
           ${state.profile.role !== "vendedor" ? `<span>· ${esc(c.vendedor || "")}</span>` : ""}
           ${faltaBadge(c.codcli)}
         </div>
@@ -238,7 +239,7 @@
     const item = (label, meta, real, fmt, pctLabel) => {
       const falta = Math.max(0, meta - real), p = meta > 0 ? real / meta : (real > 0 ? 1 : 0);
       const cls = meta <= 0 ? "" : falta <= 0 ? "ok" : p >= 0.8 ? "warn" : "bad";
-      return `<div class="mk ${cls}"><div class="l">${label}${isVendedor() ? "" : ` <span class="muted">(+${pctLabel}%)</span>`}</div>
+      return `<div class="mk ${cls}"><div class="l">${label}${telaVendedor() ? "" : ` <span class="muted">(+${pctLabel}%)</span>`}</div>
         <div class="v">${fmt(real)} <small>/ ${fmt(meta)}</small></div>
         <div class="s">${meta <= 0 ? "sem base" : falta <= 0 ? "✔ batida" : `falta <b>${fmt(falta)}</b>`}</div>
         <div class="bar"><div style="width:${Math.min(100, Math.round(p * 100))}%"></div></div></div>`;
@@ -299,7 +300,7 @@
     Mix.openModal(`
       <h3>Sugerir pedido pela meta</h3>
       <p class="sub" style="margin:0 0 10px">${esc(r.m.msg)}</p>
-      <p class="sub" style="margin:0 0 10px">Serão sugeridos <b>${itens.length} produtos</b> (${fmtInt.format(unid)} unidades): <b>${nAno}</b> comprados em ${esc(Mix.nomeMes(r.mes_base) || "ano passado")} ${isVendedor() ? "" : ` com <b>+${Mix.METAS_PCT.qtd}%</b>`}, descontando o já comprado neste mês${nMix ? `, e <b>${nMix}</b> dos outros meses do ano passado para completar o mix` : ""}.${foraMix ? ` ${foraMix} deles não estão no mix atual e serão incluídos na lista.` : ""}</p>
+      <p class="sub" style="margin:0 0 10px">Serão sugeridos <b>${itens.length} produtos</b> (${fmtInt.format(unid)} unidades): <b>${nAno}</b> comprados em ${esc(Mix.nomeMes(r.mes_base) || "ano passado")} ${telaVendedor() ? "" : ` com <b>+${Mix.METAS_PCT.qtd}%</b>`}, descontando o já comprado neste mês${nMix ? `, e <b>${nMix}</b> dos outros meses do ano passado para completar o mix` : ""}.${foraMix ? ` ${foraMix} deles não estão no mix atual e serão incluídos na lista.` : ""}</p>
       <div class="field"><label>Quantidades já digitadas</label>
         <select id="metaSubst"><option value="1">Substituir pelas da meta</option><option value="0">Manter (só preencher vazias)</option></select></div>
       <div class="actions"><button class="btn ghost" data-close>Cancelar</button><button class="btn" id="metaOk">Aplicar</button></div>`);
@@ -359,7 +360,7 @@
 
         <div class="kpis">
           <div class="kpi"><div class="l">Produtos no mix</div><div class="v">${fmtInt.format(rows.length)}</div><div class="s">${ativos} comprados nos últimos 90 dias</div></div>
-          ${isVendedor() ? "" : `
+          ${telaVendedor() ? "" : `
           <div class="kpi"><div class="l">Valor total comprado</div><div class="v">${fmtBRL.format(total)}</div><div class="s">${fmtInt.format(pedidos)} pedidos</div></div>
           <div class="kpi"><div class="l">Quantidade total</div><div class="v">${fmtNum.format(qtd)}</div><div class="s">${fornecedores} fornecedores</div></div>`}
           <div class="kpi"><div class="l">Última compra</div><div class="v">${fmtDate(ultima)}</div><div class="s">${ultima ? diasDesde(ultima) + " dias atrás" : ""}</div></div>
@@ -368,7 +369,7 @@
         ${renderMetaBox()}
 
         <div class="toolbar">
-          <input type="search" id="fMix" placeholder="${isVendedor() ? "Filtrar produto…" : "Filtrar produto ou fornecedor…"}" value="${esc(state.filter)}">
+          <input type="search" id="fMix" placeholder="${telaVendedor() ? "Filtrar produto…" : "Filtrar produto ou fornecedor…"}" value="${esc(state.filter)}">
           <label class="chk" title="Mostra só código, produto, estoque e quantidade sugerida"><input type="checkbox" id="fList" ${listMode ? "checked" : ""}> Apenas listagem</label>
           <select id="fStatus">
             <option value="">Todos os status</option>
@@ -446,7 +447,7 @@
   ];
   const visibleCols = () => {
     if (listMode) return ALL_COLS.filter((c) => c.list || c.key === "codprod" || c.key === "descricao");
-    const cols = isVendedor() ? ALL_COLS.filter((c) => c.v) : ALL_COLS;
+    const cols = telaVendedor() ? ALL_COLS.filter((c) => c.v) : ALL_COLS;
     return cols.filter((c) => c.key !== "estoque_cli"); // estoque só no modo listagem
   };
 
@@ -488,7 +489,7 @@
   function exportExcel() {
     const rows = filteredRows();
     const c = state.mix[0] || state.selected;
-    const data = rows.map((r) => isVendedor() ? {
+    const data = rows.map((r) => telaVendedor() ? {
       "Cód. Produto": r.codprod, "Produto": r.descricao, "Embalagem": r.embalagem,
       "Última compra": fmtDate(r.ultima_compra), "Dias sem comprar": r.dias_sem_comprar, "Status": r.status_ultima_compra,
     } : {
