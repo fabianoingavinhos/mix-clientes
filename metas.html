@@ -30,7 +30,7 @@
   a.cli-link:hover { text-decoration:underline; }
   .cob-bar { height:8px; background:#eee; border-radius:4px; overflow:hidden; min-width:80px; }
   .cob-bar > div { height:100%; background:var(--brand); }
-  tr.batida .cob-bar > div { background:var(--ok); }
+  tr.batida .cob-bar > div, .cob-bar.ok > div { background:var(--ok); }
   th.num, td.num { text-align:right; }
   .falta b { color:var(--bad); }
   .legend { display:flex; gap:10px; flex-wrap:wrap; font-size:12.5px; color:var(--muted); margin:6px 0 0; }
@@ -45,7 +45,7 @@
 
 <script>
 (async () => {
-  const { sb, fmtBRL, fmtInt, fmtNum, esc, el, calcMeta, metaBadge, metaLabel, metaDe, METAS_PCT, nomeMes } = Mix;
+  const { sb, fmtBRL, fmtInt, fmtNum, esc, el, calcMeta, metaBadge, metaLabel, metaSelos, metaDe, METAS_PCT, nomeMes } = Mix;
   const ctx = await Mix.requireAuth();
   const p = ctx.profile;
   const root = el("root");
@@ -74,9 +74,23 @@
           <input type="search" id="fQ" placeholder="Código, nome, fantasia ou cidade…">
           <select id="fStatus">
             <option value="">Todos os clientes</option>
-            <option value="falta">Faltando para a meta</option>
-            <option value="quase">Quase lá (≥ 80%)</option>
-            <option value="batida">Meta batida</option>
+            <option value="alguma:falta">Falta alguma das metas</option>
+            <option value="todas:batida">Todas as metas batidas</option>
+            <optgroup label="Financeiro (R$)">
+              <option value="valor:falta">Financeiro faltando</option>
+              <option value="valor:quase">Financeiro quase (≥ 80%)</option>
+              <option value="valor:batida">Financeiro batido</option>
+            </optgroup>
+            <optgroup label="Quantidade (unid.)">
+              <option value="qtd:falta">Quantidade faltando</option>
+              <option value="qtd:quase">Quantidade quase (≥ 80%)</option>
+              <option value="qtd:batida">Quantidade batida</option>
+            </optgroup>
+            <optgroup label="Mix (itens)">
+              <option value="mix:falta">Mix faltando</option>
+              <option value="mix:quase">Mix quase (≥ 80%)</option>
+              <option value="mix:batida">Mix batido</option>
+            </optgroup>
             <option value="sem_base">Sem venda no ano passado</option>
           </select>
           <span class="muted" id="countInfo" style="font-size:13px"></span>
@@ -135,16 +149,20 @@
         <div class="bar"><div style="width:${Math.min(100, Math.round(pct * 100))}%"></div></div>
       </div>`;
     };
-    const faltas = [];
-    if (meta.valor - real.valor > 0) faltas.push(fmtBRL.format(meta.valor - real.valor));
-    if (meta.qtd - real.qtd > 0) faltas.push(`${fmtInt.format(meta.qtd - real.qtd)} unidades`);
-    if (meta.mix - real.mix > 0) faltas.push(`${fmtInt.format(meta.mix - real.mix)} itens de mix`);
-    if (metaCli - realCli > 0) faltas.push(`${fmtInt.format(metaCli - realCli)} clientes atendidos`);
-    const pctV = meta.valor > 0 ? real.valor / meta.valor : 0;
+    // Cada meta é independente: o financeiro batido não cobre a de mix nem a de quantidade.
+    const linha = (lab, metaV, realV, fmt, unidade) => metaV <= 0 ? `${lab}: sem base`
+      : realV >= metaV ? `${lab}: ✔ batida`
+      : `${lab}: <b>faltam ${fmt(metaV - realV)}${unidade}</b>${realV / metaV >= 0.8 ? " (quase)" : ""}`;
+    const situacoes = [
+      linha("Financeiro", meta.valor, real.valor, (v) => fmtBRL.format(v), ""),
+      linha("Quantidade", meta.qtd, real.qtd, (v) => fmtInt.format(v), " unid."),
+      linha("Mix", meta.mix, real.mix, (v) => fmtInt.format(v), " itens"),
+      linha("Clientes atendidos", metaCli, realCli, (v) => fmtInt.format(v), " clientes"),
+    ];
+    const todasBatidas = meta.valor > 0 && real.valor >= meta.valor && real.qtd >= meta.qtd && real.mix >= meta.mix && realCli >= metaCli;
     const msg = meta.valor <= 0 ? `<div class="msg info meta-msg">Sem venda no ano passado para calcular a meta.</div>`
-      : !faltas.length ? `<div class="msg ok meta-msg">🎉 <b>${esc(nome)}</b> bateu a meta do mês em todos os indicadores!</div>`
-      : pctV >= 0.8 ? `<div class="msg warn meta-msg"><b>${esc(nome)}</b>, você quase atingiu a meta: faltam <b>${faltas.join("</b>, <b>")}</b>.</div>`
-      : `<div class="msg info meta-msg">Para <b>${esc(nome)}</b> bater a meta do mês faltam <b>${faltas.join("</b>, <b>")}</b>.</div>`;
+      : todasBatidas ? `<div class="msg ok meta-msg">🎉 <b>${esc(nome)}</b> bateu todas as metas do mês!</div>`
+      : `<div class="msg info meta-msg"><b>${esc(nome)}</b> — cada meta conta separado: ${situacoes.join(" · ")}.</div>`;
     el("resumo").innerHTML = `
       <div class="metas-grid">
         ${card("Financeiro", meta.valor, real.valor, (v) => fmtBRL.format(v), "", `+${METAS_PCT.valor}%`)}
@@ -166,15 +184,25 @@
     { key: "pct", label: "% da meta", num: true },
     { key: "falta_qtd", label: "Falta unid.", num: true },
     { key: "falta_mix", label: "Falta mix", num: true },
-    { key: "status", label: "Situação" },
+    { key: "status", label: "Situação (R$ · Un · Mix)" },
   ];
-  const pick = (r, k) => k === "meta_valor" ? r.m.meta.valor : k === "falta_valor" ? r.m.falta.valor : k === "pct" ? r.m.pct
+  const pick = (r, k) => k === "meta_valor" ? r.m.meta.valor : k === "falta_valor" ? r.m.falta.valor : k === "pct" ? r.m.pct.valor
     : k === "falta_qtd" ? r.m.falta.qtd : k === "falta_mix" ? r.m.falta.mix : k === "status" ? r.m.status : k === "cliente" ? (r.fantasia || r.cliente) : r[k];
+
+  /** Filtro por meta individual: "valor:falta", "mix:batida", "alguma:falta", "todas:batida", "sem_base". */
+  function passaStatus(m, f) {
+    if (!f) return true;
+    if (f === "sem_base") return m.status === "sem_base";
+    if (f === "alguma:falta") return m.status !== "sem_base" && m.status !== "batida";
+    if (f === "todas:batida") return m.status === "batida";
+    const [ind, st] = f.split(":");
+    return m.st[ind] === st;
+  }
 
   function filtered() {
     const q = state.q.trim().toLowerCase();
     let rows = rowsDoVendedor().filter((r) =>
-      (!state.status || r.m.status === state.status) &&
+      passaStatus(r.m, state.status) &&
       (!q || String(r.codcli) === q || (r.cliente || "").toLowerCase().includes(q) || (r.fantasia || "").toLowerCase().includes(q) || (r.cidade || "").toLowerCase().includes(q)));
     const { key, dir } = state.sort;
     rows.sort((a, b) => {
@@ -202,10 +230,10 @@
             <td class="num"><b>${fmtBRL.format(m.meta.valor)}</b><div class="small">${fmtInt.format(m.meta.qtd)} un · ${m.meta.mix} itens</div></td>
             <td class="num">${fmtBRL.format(m.real.valor)}<div class="small">${fmtInt.format(m.real.qtd)} un · ${m.real.mix} itens</div></td>
             <td class="num falta">${m.falta.valor > 0 ? `<b>${fmtBRL.format(m.falta.valor)}</b>` : "—"}</td>
-            <td class="num"><div class="cob-bar"><div style="width:${Math.min(100, Math.round(m.pct * 100))}%"></div></div><div class="small">${m.meta.valor > 0 ? Math.round(m.pct * 100) + "%" : "—"}</div></td>
+            <td class="num"><div class="cob-bar ${m.st.valor === "batida" ? "ok" : ""}"><div style="width:${Math.min(100, Math.round(m.pct.valor * 100))}%"></div></div><div class="small">${m.meta.valor > 0 ? Math.round(m.pct.valor * 100) + "%" : "—"}</div></td>
             <td class="num">${m.falta.qtd > 0 ? fmtInt.format(m.falta.qtd) : "—"}</td>
             <td class="num">${m.falta.mix > 0 ? m.falta.mix : "—"}</td>
-            <td><span class="badge ${metaBadge(m.status)}">${metaLabel[m.status]}</span></td>
+            <td>${metaSelos(m)}</td>
           </tr>`; }).join("") || `<tr><td colspan="9" class="empty">Nenhum cliente</td></tr>`}
         </tbody>
       </table></div>`;
@@ -225,7 +253,9 @@
       "Ano passado R$": +r.base_valor || 0, "Ano passado unid.": +r.base_qtd || 0, "Ano passado mix": r.base_mix,
       "Meta R$": r.m.meta.valor, "Meta unid.": r.m.meta.qtd, "Meta mix": r.m.meta.mix,
       "Realizado R$": r.m.real.valor, "Realizado unid.": r.m.real.qtd, "Realizado mix": r.m.real.mix,
-      "Falta R$": r.m.falta.valor, "Falta unid.": r.m.falta.qtd, "Falta mix": r.m.falta.mix, "% da meta": Math.round(r.m.pct * 100), "Situação": metaLabel[r.m.status],
+      "Falta R$": r.m.falta.valor, "Falta unid.": r.m.falta.qtd, "Falta mix": r.m.falta.mix,
+      "% financeiro": Math.round(r.m.pct.valor * 100), "% quantidade": Math.round(r.m.pct.qtd * 100), "% mix": Math.round(r.m.pct.mix * 100),
+      "Situação financeiro": metaLabel[r.m.st.valor], "Situação quantidade": metaLabel[r.m.st.qtd], "Situação mix": metaLabel[r.m.st.mix], "Situação geral": metaLabel[r.m.status],
     }));
     const ws = XLSX.utils.json_to_sheet(data);
     const wb = XLSX.utils.book_new();

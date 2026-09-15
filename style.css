@@ -133,6 +133,9 @@ td .small { color: var(--muted); font-size: 12px; }
 .badge.bad { background: var(--bad-soft); color: var(--bad); }
 .badge.gray { background: #eef0f3; color: var(--muted); }
 .badge.brand { background: var(--brand-soft); color: var(--brand); }
+/* Selos das metas independentes (financeiro · quantidade · mix) */
+.selos { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+.selos .badge { font-size: 11px; padding: 2px 7px; }
 
 .empty { text-align: center; color: var(--muted); padding: 50px 20px; }
 .empty svg { width: 44px; height: 44px; opacity: .35; margin-bottom: 10px; }

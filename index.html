@@ -159,9 +159,8 @@
   function faltaBadge(codcli) {
     const r = state.metas.get(codcli); if (!r) return "";
     const m = r.m;
-    if (m.status === "batida") return `<span class="badge ok">meta batida</span>`;
     if (m.status === "sem_base") return "";
-    return `<span class="badge ${Mix.metaBadge(m.status)}" title="${esc(m.msg)}">falta ${fmtBRL.format(m.falta.valor)}${m.falta.mix ? " · " + m.falta.mix + " mix" : ""}</span>`;
+    return Mix.metaSelos(m);
   }
 
   let lastQuery = null;
@@ -236,22 +235,23 @@
     const ref = state.metaRef;
     if (!r) return state.metas.size ? `<div id="metaBox" class="meta-box"><div class="msg info" style="margin:0">Sem venda deste cliente no ano passado nem no mês atual — sem meta calculada.</div></div>` : `<div id="metaBox"></div>`;
     const m = r.m, pct = Mix.METAS_PCT;
-    const item = (label, meta, real, fmt, pctLabel) => {
-      const falta = Math.max(0, meta - real), p = meta > 0 ? real / meta : (real > 0 ? 1 : 0);
-      const cls = meta <= 0 ? "" : falta <= 0 ? "ok" : p >= 0.8 ? "warn" : "bad";
+    // Cada meta é avaliada sozinha: bater o financeiro não conta como bater a de mix.
+    const item = (label, ind, fmt, pctLabel) => {
+      const meta = m.meta[ind], real = m.real[ind], falta = m.falta[ind], s = m.st[ind];
+      const cls = s === "batida" ? "ok" : s === "quase" ? "warn" : s === "falta" ? "bad" : "";
       return `<div class="mk ${cls}"><div class="l">${label}${telaVendedor() ? "" : ` <span class="muted">(+${pctLabel}%)</span>`}</div>
         <div class="v">${fmt(real)} <small>/ ${fmt(meta)}</small></div>
-        <div class="s">${meta <= 0 ? "sem base" : falta <= 0 ? "✔ batida" : `falta <b>${fmt(falta)}</b>`}</div>
-        <div class="bar"><div style="width:${Math.min(100, Math.round(p * 100))}%"></div></div></div>`;
+        <div class="s">${s === "sem_base" ? "sem base" : s === "batida" ? "✔ meta batida" : `falta <b>${fmt(falta)}</b> (${Math.round(m.pct[ind] * 100)}%)`}</div>
+        <div class="bar"><div style="width:${Math.min(100, Math.round(m.pct[ind] * 100))}%"></div></div></div>`;
     };
     return `<div id="metaBox" class="meta-box">
       <div class="meta-head"><b>🎯 Meta de ${esc(Mix.nomeMes(r.mes_atual))}</b>
         <span class="muted">base: ${r.modo === "mes" ? "venda de " + esc(Mix.nomeMes(r.mes_base)) : r.modo === "media" ? "média mensal do ano passado" : "—"}</span>
         <a href="metas.html" class="muted" style="margin-left:auto;font-size:12.5px">ver todas as metas →</a></div>
       <div class="metas-grid">
-        ${item("Financeiro", m.meta.valor, m.real.valor, (v) => fmtBRL.format(v), pct.valor)}
-        ${item("Quantidade", m.meta.qtd, m.real.qtd, (v) => fmtInt.format(v), pct.qtd)}
-        ${item("Mix", m.meta.mix, m.real.mix, (v) => fmtInt.format(v), pct.mix)}
+        ${item("Financeiro", "valor", (v) => fmtBRL.format(v), pct.valor)}
+        ${item("Quantidade", "qtd", (v) => fmtInt.format(v), pct.qtd)}
+        ${item("Mix", "mix", (v) => fmtInt.format(v), pct.mix)}
       </div>
       <div class="msg ${m.status === "batida" ? "ok" : m.status === "quase" ? "warn" : "info"}" style="margin:8px 0 0">${esc(m.msg)}${m.status !== "batida" && m.status !== "sem_base" ? ` <button class="btn sm" id="metaSugerir" style="margin-left:8px">🎯 Sugerir pedido pela meta</button>` : ""}</div>
     </div>`;

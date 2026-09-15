@@ -196,32 +196,56 @@
   const NOME_MES = ["janeiro","fevereiro","março","abril","maio","junho","julho","agosto","setembro","outubro","novembro","dezembro"];
   const nomeMes = (d) => { if (!d) return "—"; const [y, m] = String(d).slice(0, 10).split("-"); return `${NOME_MES[+m - 1]}/${y}`; };
   const metaDe = (base, pct, inteiro) => { const v = (+base || 0) * (1 + pct / 100); return inteiro ? Math.ceil(v - 1e-9) : Math.round(v * 100) / 100; };
+  // Situação de UM indicador isolado: cada meta (financeiro, quantidade, mix) é avaliada sozinha.
+  const statusInd = (meta, real) => meta <= 0 ? "sem_base" : real >= meta ? "batida" : (real / meta) >= 0.8 ? "quase" : "falta";
+  const juntar = (a) => a.length > 1 ? a.slice(0, -1).join(", ") + " e " + a[a.length - 1] : (a[0] || "");
   /**
-   * Calcula a meta de um cliente (linha de metas_clientes) e o que falta.
-   * status: "sem_base" (sem venda no ano passado), "batida", "quase" (>= 80%), "falta".
+   * Calcula as metas de um cliente (linha de metas_clientes). As três metas são independentes:
+   * st.valor (financeiro), st.qtd (unidades) e st.mix (produtos distintos), cada uma com
+   * "sem_base" / "batida" / "quase" (>= 80%) / "falta". pct também é um objeto por indicador.
+   * status = resumo geral (batida só quando as três batem) — usado em filtros e ordenação.
    */
   function calcMeta(r) {
     const meta = { valor: metaDe(r.base_valor, METAS_PCT.valor), qtd: metaDe(r.base_qtd, METAS_PCT.qtd, true), mix: metaDe(r.base_mix, METAS_PCT.mix, true) };
     const real = { valor: +r.real_valor || 0, qtd: +r.real_qtd || 0, mix: +r.real_mix || 0 };
     const falta = { valor: Math.max(0, meta.valor - real.valor), qtd: Math.max(0, meta.qtd - real.qtd), mix: Math.max(0, meta.mix - real.mix) };
-    const pct = meta.valor > 0 ? real.valor / meta.valor : (real.valor > 0 ? 1 : 0);
-    const batida = meta.valor > 0 && falta.valor <= 0 && falta.qtd <= 0 && falta.mix <= 0;
-    let status = meta.valor <= 0 ? "sem_base" : batida ? "batida" : pct >= 0.8 ? "quase" : "falta";
-    const partes = [];
-    if (falta.valor > 0) partes.push(fmtBRL.format(falta.valor));
-    if (falta.qtd > 0) partes.push(`${fmtInt.format(falta.qtd)} unidades`);
-    if (falta.mix > 0) partes.push(`${falta.mix} ${falta.mix === 1 ? "produto" : "produtos"} no mix`);
-    const msg = status === "sem_base"
+    const p1 = (m, v) => m > 0 ? v / m : (v > 0 ? 1 : 0);
+    const pct = { valor: p1(meta.valor, real.valor), qtd: p1(meta.qtd, real.qtd), mix: p1(meta.mix, real.mix) };
+    const st = { valor: statusInd(meta.valor, real.valor), qtd: statusInd(meta.qtd, real.qtd), mix: statusInd(meta.mix, real.mix) };
+    const semBase = meta.valor <= 0 && meta.qtd <= 0 && meta.mix <= 0;
+    const status = semBase ? "sem_base"
+      : (st.valor === "batida" && st.qtd === "batida" && st.mix === "batida") ? "batida"
+      : (st.valor === "falta" || st.qtd === "falta" || st.mix === "falta") ? "falta" : "quase";
+    const faltam = [], plurais = [];
+    if (falta.valor > 0) { faltam.push(`${fmtBRL.format(falta.valor)} no financeiro`); plurais.push(false); }
+    if (falta.qtd > 0) { faltam.push(`${fmtInt.format(falta.qtd)} ${falta.qtd === 1 ? "unidade" : "unidades"}`); plurais.push(falta.qtd > 1); }
+    if (falta.mix > 0) { faltam.push(`${falta.mix} ${falta.mix === 1 ? "produto" : "produtos"} no mix`); plurais.push(falta.mix > 1); }
+    const verbo = faltam.length > 1 || plurais[0] ? "faltam" : "falta";
+    const batidas = [];
+    if (st.valor === "batida") batidas.push("financeiro");
+    if (st.qtd === "batida") batidas.push("quantidade");
+    if (st.mix === "batida") batidas.push("mix");
+    const msg = semBase
       ? (real.valor > 0 ? "Cliente sem venda no mesmo mês do ano passado — tudo que comprar é crescimento." : "Sem venda no mesmo mês do ano passado — sem meta calculada.")
-      : status === "batida" ? "🎉 Meta deste cliente batida!"
-      : status === "quase" ? `Você quase atingiu a meta deste cliente: ${partes.length ? "faltam " + partes.join(", ") : "falta pouco"}.`
-      : `Para bater a meta deste cliente ${partes.length === 1 ? "falta" : "faltam"} ${partes.join(", ")}.`;
-    return { meta, real, falta, pct, status, msg };
+      : !faltam.length ? "🎉 Todas as metas deste cliente batidas: financeiro, quantidade e mix!"
+      : `${batidas.length ? `${juntar(batidas)} ${batidas.length > 1 ? "batidos" : "batido"} ✔ · ` : ""}${verbo} ${juntar(faltam)}.`;
+    return { meta, real, falta, pct, st, status, msg: msg.charAt(0).toUpperCase() + msg.slice(1), faltam, batidas };
   }
   const metaBadge = (status) => status === "batida" ? "ok" : status === "quase" ? "warn" : status === "falta" ? "bad" : "gray";
   const metaLabel = { batida: "Meta batida", quase: "Quase lá", falta: "Falta", sem_base: "Sem base" };
+  /** Selos das três metas lado a lado (R$ / Un / Mix), cada uma com a sua própria situação. */
+  function metaSelos(m) {
+    if (m.status === "sem_base") return `<span class="badge gray">Sem base</span>`;
+    const sel = (rot, ind, nome, fmt) => {
+      const s = m.st[ind];
+      const txt = s === "sem_base" ? "sem base" : s === "batida" ? "✔" : "falta " + fmtInt.format(Math.ceil(m.falta[ind]));
+      const dica = `${nome}: ${fmt(m.real[ind])} de ${fmt(m.meta[ind])} (${Math.round(m.pct[ind] * 100)}%)${m.falta[ind] > 0 ? " · falta " + fmt(m.falta[ind]) : " · meta batida"}`;
+      return `<span class="badge ${metaBadge(s)}" title="${esc(dica)}">${rot} ${txt}</span>`;
+    };
+    return `<span class="selos">${sel("R$", "valor", "Financeiro", (v) => fmtBRL.format(v))}${sel("Un", "qtd", "Quantidade", (v) => fmtInt.format(v))}${sel("Mix", "mix", "Mix", (v) => fmtInt.format(v))}</span>`;
+  }
 
   window.Mix = { sb, configured, cfg, fmtBRL, fmtNum, fmtInt, fmtDate, statusClass, esc, el, showMsg, ROLE_LABEL,
     getSessionProfile, login, logout, requireAuth, renderTopbar, bindTopbar, openModal, closeModal, toast, protegerDados, perfilRestrito,
-    METAS_PCT, fmtMes, nomeMes, metaDe, calcMeta, metaBadge, metaLabel };
+    METAS_PCT, fmtMes, nomeMes, metaDe, calcMeta, metaBadge, metaLabel, metaSelos };
 })();
