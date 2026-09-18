@@ -49,7 +49,10 @@
     : `Seus clientes (vendedor ${p.cod_vendedor ?? "—"})`;
 
   // "sem venda" = sem compra há mais de N dias ou nunca comprou (N ajustável)
-  let state = { clientes: [], roteiro: [], dias: 90, venda: "", atend: "", vendedor: "", q: "", limite: null, cobVend: null };
+  let state = { clientes: [], roteiro: [], dias: 90, venda: "", atend: "", vendedor: "", q: "", limite: null, cobVend: null, ordem: "", v3m: null };
+  const { fmtBRL } = Mix;
+  const MESES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+  const nomeMes = (iso) => { if (!iso) return ""; const [y, m] = iso.split("-"); return `${MESES[+m - 1]}/${y.slice(2)}`; };
 
   root.innerHTML = Mix.renderTopbar(p, "clientes") + `
     <div class="wrap">
@@ -73,6 +76,12 @@
           </select>
           ${isVendedor ? "" : `<select id="fVendedor"><option value="">Todos os vendedores</option></select>`}
           <input type="search" id="fQ" placeholder="Código, nome, fantasia, cidade ou telefone…">
+          <select id="fOrdem" title="Ordenar a lista">
+            <option value="">Ordenar: vendedor e dias sem comprar</option>
+            <option value="media_desc">Ordenar: maior média 3 meses</option>
+            <option value="media_asc">Ordenar: menor média 3 meses</option>
+            <option value="queda">Ordenar: maior queda (mês passado × média)</option>
+          </select>
         </div>
 
         <div id="matriz"></div>
@@ -95,8 +104,16 @@
   async function loadAll() {
     el("lista").innerHTML = `<div class="empty"><span class="spinner dark"></span></div>`;
     try {
-      const [cli, rot, { data: meta }] = await Promise.all([loadTable("clientes"), loadTable("roteiro"), sb.from("clientes_meta").select("*").eq("id", 1).maybeSingle()]);
+      const [cli, rot, { data: meta }, v3] = await Promise.all([loadTable("clientes"), loadTable("roteiro"), sb.from("clientes_meta").select("*").eq("id", 1).maybeSingle(),
+        loadTable("vendas_3m").catch(() => null)]);
       state.clientes = cli; state.roteiro = rot;
+      // venda dos últimos 3 meses (alimentada pela integração Winthor)
+      if (v3 && v3.length) {
+        const m = new Map(v3.map((r) => [r.codcli, r]));
+        const r0 = v3[0];
+        state.v3m = { m1: r0.mes_1, m2: r0.mes_2, m3: r0.mes_3, atual: r0.mes_atual };
+        cli.forEach((c) => { c._v = m.get(c.codcli) || null; });
+      } else { state.v3m = null; cli.forEach((c) => { c._v = null; }); }
       if (meta?.atualizado_em) { const d = new Date(meta.atualizado_em); el("metaInfo").textContent = `base de clientes de ${d.toLocaleDateString("pt-BR")} ${d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`; }
       else el("metaInfo").textContent = "nenhuma base de clientes carregada ainda";
     } catch (e) {
@@ -128,9 +145,25 @@
       (state.cobVend == null || c.cod_vendedor === state.cobVend) &&
       (!q || String(c.codcli).includes(q) || (c.cliente || "").toLowerCase().includes(q) || (c.fantasia || "").toLowerCase().includes(q) || (c.cidade || "").toLowerCase().includes(q) || (c.telefone || "").includes(q) || (c.cnpj_cpf || "").includes(q)));
   }
+  const media = (c) => +(c._v?.media_vlr_3m || 0);
+  const queda = (c) => media(c) - +(c._v?.vlr_m3 || 0);
   function filtrados() {
-    return base().filter((c) => (!state.venda || (state.venda === "sem") === semVenda(c)) && (!state.atend || (state.atend === "sim") === c._atendido))
-      .sort((a, b) => String(a.vendedor || "").localeCompare(String(b.vendedor || ""), "pt-BR") || ((b.dias_sem_comprar ?? 99999) - (a.dias_sem_comprar ?? 99999)));
+    const padrao = (a, b) => String(a.vendedor || "").localeCompare(String(b.vendedor || ""), "pt-BR") || ((b.dias_sem_comprar ?? 99999) - (a.dias_sem_comprar ?? 99999));
+    const ord = state.ordem === "media_desc" ? (a, b) => media(b) - media(a) || padrao(a, b)
+      : state.ordem === "media_asc" ? (a, b) => media(a) - media(b) || padrao(a, b)
+      : state.ordem === "queda" ? (a, b) => queda(b) - queda(a) || padrao(a, b) : padrao;
+    return base().filter((c) => (!state.venda || (state.venda === "sem") === semVenda(c)) && (!state.atend || (state.atend === "sim") === c._atendido)).sort(ord);
+  }
+  // célula com os 3 meses, a média e o mês atual
+  const brl0 = (v) => fmtBRL.format(Math.round(+v || 0)).replace(/,00$/, "");
+  function celVenda(c) {
+    const v = c._v;
+    if (!v) return `<span class="muted small">sem venda no período</span>`;
+    const m3 = +v.vlr_m3 || 0, med = +v.media_vlr_3m || 0;
+    const tend = med > 0 ? (m3 >= med * 1.05 ? `<span class="badge ok" title="Mês passado acima da média">▲</span>` : m3 <= med * 0.95 ? `<span class="badge bad" title="Mês passado abaixo da média">▼</span>` : "") : "";
+    return `<div><b>${brl0(med)}</b> <span class="small muted">média/mês</span> ${tend}</div>
+      <div class="small muted">${nomeMes(v.mes_1)} ${brl0(v.vlr_m1)} · ${nomeMes(v.mes_2)} ${brl0(v.vlr_m2)} · ${nomeMes(v.mes_3)} ${brl0(v.vlr_m3)}</div>
+      <div class="small">${nomeMes(v.mes_atual)} (até hoje): <b>${brl0(v.vlr_atual)}</b></div>`;
   }
 
   // ---------- render ----------
@@ -153,6 +186,7 @@
         <div class="kpi"><div class="l">Clientes</div><div class="v">${fmtInt.format(b.length)}</div><div class="s">${isVendedor ? "" : new Set(b.map((c) => c.cod_vendedor)).size + " vendedores"}</div></div>
         <div class="kpi"><div class="l">Com venda</div><div class="v">${fmtInt.format(cv)}</div><div class="s">${pct(cv, b.length)} · ${state.dias === "nunca" ? "já compraram alguma vez" : "compraram nos últimos " + state.dias + " dias"}</div></div>
         <div class="kpi"><div class="l">Sem venda</div><div class="v">${fmtInt.format(sv)}</div><div class="s">${pct(sv, b.length)} · ${state.dias === "nunca" ? "nunca compraram" : "+" + state.dias + " dias ou nunca"}</div></div>
+        ${state.v3m ? `<div class="kpi"><div class="l">Venda média/mês</div><div class="v">${brl0(b.reduce((s, c) => s + media(c), 0))}</div><div class="s">${nomeMes(state.v3m.m1)} a ${nomeMes(state.v3m.m3)} · ${nomeMes(state.v3m.atual)} até hoje ${brl0(b.reduce((s, c) => s + +(c._v?.vlr_atual || 0), 0))}</div></div>` : ""}
         <div class="kpi"><div class="l">Atendidos por promotor</div><div class="v">${fmtInt.format(at)}</div><div class="s">${pct(at, b.length)} · ${fmtInt.format(na)} sem promotor</div></div>
       </div>
       <div class="matriz">
@@ -178,12 +212,12 @@
     let porVend = "";
     if (!isVendedor && !state.vendedor && state.cobVend == null) {
       const m = new Map();
-      b.forEach((c) => { const k = c.cod_vendedor ?? 0; if (!m.has(k)) m.set(k, { cod: k, nome: c.vendedor || "Sem vendedor", t: 0, sv: 0, na: 0 }); const v = m.get(k); v.t++; if (semVenda(c)) v.sv++; if (!c._atendido) v.na++; });
+      b.forEach((c) => { const k = c.cod_vendedor ?? 0; if (!m.has(k)) m.set(k, { cod: k, nome: c.vendedor || "Sem vendedor", t: 0, sv: 0, na: 0, med: 0, atual: 0 }); const v = m.get(k); v.t++; v.med += media(c); v.atual += +(c._v?.vlr_atual || 0); if (semVenda(c)) v.sv++; if (!c._atendido) v.na++; });
       const vs = [...m.values()].sort((a, b2) => String(a.nome).localeCompare(String(b2.nome), "pt-BR"));
       porVend = `<div class="rt-group">
         <h3>Por vendedor <span class="cnt">clique para filtrar</span></h3>
         <div class="table-wrap cards"><table>
-          <thead><tr><th>Vendedor</th><th class="num">Clientes</th><th class="num">Com venda</th><th class="num">Sem venda</th><th>% com venda</th><th class="num">Sem promotor</th></tr></thead>
+          <thead><tr><th>Vendedor</th><th class="num">Clientes</th><th class="num">Com venda</th><th class="num">Sem venda</th><th>% com venda</th><th class="num">Sem promotor</th>${state.v3m ? `<th class="num">Média/mês 3m</th><th class="num">${nomeMes(state.v3m.atual)} até hoje</th>` : ""}</tr></thead>
           <tbody>${vs.map((v) => `
             <tr class="cob-row" data-cod="${v.cod}">
               <td data-l="Vendedor"><b>${esc(v.nome)}</b> <span class="mono small">${v.cod}</span></td>
@@ -192,6 +226,7 @@
               <td class="num" data-l="Sem venda"><b>${fmtInt.format(v.sv)}</b></td>
               <td data-l="% com venda"><div class="row" style="gap:8px;align-items:center"><div class="cob-bar"><div style="width:${v.t ? Math.round((v.t - v.sv) / v.t * 100) : 0}%"></div></div><span class="badge ${(v.t - v.sv) / v.t >= .7 ? "ok" : (v.t - v.sv) / v.t >= .4 ? "warn" : "bad"}">${v.t ? Math.round((v.t - v.sv) / v.t * 100) : 0}%</span></div></td>
               <td class="num" data-l="Sem promotor">${fmtInt.format(v.na)}</td>
+              ${state.v3m ? `<td class="num" data-l="Média/mês 3m"><b>${brl0(v.med)}</b></td><td class="num" data-l="Mês atual">${brl0(v.atual)}</td>` : ""}
             </tr>`).join("")}
           </tbody>
         </table></div>
@@ -203,7 +238,7 @@
         <h3>${titulo} <span class="cnt">${fmtInt.format(lista.length)} clientes${state.cobVend != null ? " · " + esc(b[0]?.vendedor || "") : ""}</span>
           ${state.cobVend != null ? `<button class="btn ghost sm" id="cobTodos">Todos os vendedores</button>` : ""}</h3>
         <div class="table-wrap cards"><table>
-          <thead><tr><th>Cliente</th><th>Cidade</th><th>Telefone</th>${isVendedor ? "" : "<th>Vendedor</th>"}<th>Última compra</th><th>Status</th><th>Promotor</th></tr></thead>
+          <thead><tr><th>Cliente</th><th>Cidade</th><th>Telefone</th>${isVendedor ? "" : "<th>Vendedor</th>"}<th>Última compra</th>${state.v3m ? "<th>Venda últimos 3 meses</th>" : ""}<th>Status</th><th>Promotor</th></tr></thead>
           <tbody>${lista.slice(0, lim).map((c) => `
             <tr>
               <td class="loja" data-l="Cliente"><div class="desc">${linkCli(c, `<b>${esc(c.fantasia || c.cliente)}</b>`)}</div><div class="small">${esc(c.fantasia ? c.cliente : "")} <span class="mono">${c.codcli}</span></div></td>
@@ -211,9 +246,10 @@
               <td data-l="Telefone" class="mono small">${esc(c.telefone || "—")}</td>
               ${isVendedor ? "" : `<td data-l="Vendedor" class="small">${esc(c.vendedor || "")}</td>`}
               <td data-l="Última compra">${fmtDate(c.ultima_compra)} ${badgeVenda(c)}</td>
+              ${state.v3m ? `<td data-l="Venda 3 meses">${celVenda(c)}</td>` : ""}
               <td data-l="Status" class="small">${esc(c.status_ultima_compra || "")}</td>
               <td data-l="Promotor">${c._atendido ? `<span class="badge ok">atendido</span><div class="small">${esc(c._promotores)}</div>` : `<span class="badge gray">sem promotor</span>`}</td>
-            </tr>`).join("") || `<tr><td colspan="7" class="empty">Nenhum cliente neste filtro.</td></tr>`}
+            </tr>`).join("") || `<tr><td colspan="8" class="empty">Nenhum cliente neste filtro.</td></tr>`}
           </tbody>
         </table></div>
         ${lista.length > lim ? `<div class="row" style="margin-top:8px;align-items:center;gap:10px"><button class="btn ghost sm" id="btnMais">Mostrar mais</button><span class="muted" style="font-size:12px">Mostrando ${fmtInt.format(lim)} de ${fmtInt.format(lista.length)}</span></div>` : ""}
@@ -232,6 +268,12 @@
       "Endereço": [c.endereco, c.numero].filter(Boolean).join(", "), "Bairro": c.bairro, "Cidade": c.cidade, "UF": c.uf,
       "Vendedor": c.vendedor, "Supervisor": c.supervisor,
       "Última compra": fmtDate(c.ultima_compra), "Dias sem comprar": c.dias_sem_comprar ?? "", "Status": c.status_ultima_compra,
+      ...(state.v3m ? {
+        [`Venda ${nomeMes(state.v3m.m1)}`]: +(c._v?.vlr_m1 || 0), [`Venda ${nomeMes(state.v3m.m2)}`]: +(c._v?.vlr_m2 || 0), [`Venda ${nomeMes(state.v3m.m3)}`]: +(c._v?.vlr_m3 || 0),
+        "Média mensal 3 meses": +(c._v?.media_vlr_3m || 0), [`Venda ${nomeMes(state.v3m.atual)} (até hoje)`]: +(c._v?.vlr_atual || 0),
+        [`Qtd ${nomeMes(state.v3m.m1)}`]: +(c._v?.qtd_m1 || 0), [`Qtd ${nomeMes(state.v3m.m2)}`]: +(c._v?.qtd_m2 || 0), [`Qtd ${nomeMes(state.v3m.m3)}`]: +(c._v?.qtd_m3 || 0),
+        "Média qtd 3 meses": +(c._v?.media_qtd_3m || 0), "Mix 3 meses (produtos)": c._v?.mix_3m ?? 0,
+      } : {}),
       "Situação de venda": semVenda(c) ? "Sem venda" : "Com venda", "Atendimento": c._atendido ? "Atendido por promotor" : "Sem promotor", "Promotor": c._promotores,
     }))), "Clientes");
     XLSX.writeFile(wb, `clientes_${state.venda || "todos"}_${state.atend || "todos"}.xlsx`);
@@ -242,6 +284,7 @@
   el("fDias").addEventListener("change", (e) => { state.dias = e.target.value; state.venda = "sem"; state.limite = null; render(); });
   el("fVendedor")?.addEventListener("change", (e) => { state.vendedor = e.target.value; state.cobVend = null; state.limite = null; render(); });
   let t; el("fQ").addEventListener("input", (e) => { clearTimeout(t); t = setTimeout(() => { state.q = e.target.value; state.limite = null; render(); }, 200); });
+  el("fOrdem").addEventListener("change", (e) => { state.ordem = e.target.value; state.limite = null; render(); });
   el("btnExport")?.addEventListener("click", exportExcel);
 
   loadAll();

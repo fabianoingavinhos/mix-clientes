@@ -864,14 +864,15 @@
     { id: "roteiros", rotina: 8236, nome: "Roteiros e base de clientes", destino: "Roteiro promotor · Roteiro vendedor · Clientes", padrao: { ativo: true, supervisores: [2, 7, 9, 14, 17, 18] } },
     { id: "vendas_hist", rotina: 8238, nome: "Venda do ano passado (set a dez)", destino: "Metas", padrao: { ativo: true, supervisores: [2, 7, 9, 14, 17] } },
     { id: "vendas_atual", rotina: 8239, nome: "Venda do mês atual", destino: "Metas", padrao: { ativo: true, supervisores: [2, 7, 9, 14, 17] } },
+    { id: "vendas_3m", rotina: "V3M", nome: "Venda dos últimos 3 meses por cliente", destino: "Clientes", padrao: { ativo: true, supervisores: [2, 7, 9, 14, 17] } },
   ];
   let integ = { cfg: null, agente: null, logs: [] };
   let integPoll = null;
 
   function agenteOnline(a) { return a?.ultimo_sinal && (Date.now() - new Date(a.ultimo_sinal).getTime()) < 3 * 60 * 1000; }
   function rotinasDoAgente(a) {
-    const m = String(a?.versao || "").match(/rotinas:\s*([\d,\s]+)/);
-    return m ? m[1].split(",").map((x) => +x.trim()).filter(Boolean) : null;
+    const m = String(a?.versao || "").match(/rotinas:\s*(.+)$/);
+    return m ? m[1].split(",").map((x) => x.trim()).filter(Boolean) : null;
   }
   const fpDe = (s) => String(s || "").split(".")[0];
 
@@ -964,7 +965,7 @@
           <thead><tr><th>Ativa</th><th>Rotina</th><th>Supervisores</th><th>Última sincronização</th><th></th></tr></thead>
           <tbody>${INTEG_ROTINAS.map((r) => {
             const p = params(r), ok = ultimoOk(r.id), ul = ultimo(r.id);
-            const semSelect = rotAg && !rotAg.includes(r.rotina);
+            const semSelect = rotAg && !rotAg.includes(String(r.rotina));
             return `<tr>
               <td><input type="checkbox" data-ig-ativo="${r.id}" ${p.ativo !== false ? "checked" : ""}></td>
               <td><b>${r.rotina}</b> · ${esc(r.nome)}<div class="muted" style="font-size:12px">${esc(r.destino)}</div>
