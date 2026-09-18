@@ -28,6 +28,7 @@
         <button data-tab="upload">Planilha do mix</button>
         <button data-tab="rotas">Roteiros e clientes</button>
         <button data-tab="metas">Metas (vendas)</button>
+        <button data-tab="integ">Integração Winthor</button>
         <button data-tab="equipe">Equipe na base</button>
         <button data-tab="uso">Uso</button>
       </div>
@@ -35,6 +36,7 @@
       <div id="tab-upload" hidden></div>
       <div id="tab-rotas" hidden></div>
       <div id="tab-metas" hidden></div>
+      <div id="tab-integ" hidden></div>
       <div id="tab-equipe" hidden></div>
       <div id="tab-uso" hidden></div>
     </div>`;
@@ -42,7 +44,8 @@
 
   document.querySelectorAll(".tabs button").forEach((b) => b.addEventListener("click", () => {
     document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
-    ["users", "upload", "rotas", "metas", "equipe", "uso"].forEach((t) => el("tab-" + t).hidden = t !== b.dataset.tab);
+    ["users", "upload", "rotas", "metas", "integ", "equipe", "uso"].forEach((t) => el("tab-" + t).hidden = t !== b.dataset.tab);
+    if (b.dataset.tab === "integ") renderInteg();
     if (b.dataset.tab === "equipe") loadEquipe();
     if (b.dataset.tab === "uso") loadUso();
   }));
@@ -848,6 +851,236 @@
       st.textContent = ""; showMsg(el("vdMsg_" + origem), "Erro: " + err.message + " — a base pode estar incompleta; envie a planilha novamente.", "err");
       btn.disabled = false;
     }
+  }
+
+  // =====================================================================
+  //  INTEGRAÇÃO WINTHOR (agente no PC da empresa -> Supabase)
+  //  O agente (pasta winthor-sync) lê a configuração abaixo, roda os SELECTs no Oracle
+  //  e grava nas mesmas tabelas dos uploads. A senha do Oracle é cifrada aqui no navegador
+  //  com a chave pública do agente (RSA-OAEP) — só o agente consegue abri-la.
+  // =====================================================================
+  const INTEG_ROTINAS = [
+    { id: "mix", rotina: 8235, nome: "Mix de clientes", destino: "Consulta mix", padrao: { ativo: true, supervisores: [2, 7, 9, 14, 17], filial: 1, meses: 60 } },
+    { id: "roteiros", rotina: 8236, nome: "Roteiros e base de clientes", destino: "Roteiro promotor · Roteiro vendedor · Clientes", padrao: { ativo: true, supervisores: [2, 7, 9, 14, 17, 18] } },
+    { id: "vendas_hist", rotina: 8238, nome: "Venda do ano passado (set a dez)", destino: "Metas", padrao: { ativo: true, supervisores: [2, 7, 9, 14, 17] } },
+    { id: "vendas_atual", rotina: 8239, nome: "Venda do mês atual", destino: "Metas", padrao: { ativo: true, supervisores: [2, 7, 9, 14, 17] } },
+  ];
+  let integ = { cfg: null, agente: null, logs: [] };
+  let integPoll = null;
+
+  function agenteOnline(a) { return a?.ultimo_sinal && (Date.now() - new Date(a.ultimo_sinal).getTime()) < 3 * 60 * 1000; }
+  function rotinasDoAgente(a) {
+    const m = String(a?.versao || "").match(/rotinas:\s*([\d,\s]+)/);
+    return m ? m[1].split(",").map((x) => +x.trim()).filter(Boolean) : null;
+  }
+  const fpDe = (s) => String(s || "").split(".")[0];
+
+  async function cifrarSenhaOracle(senha, chavePublica) {
+    const [fp, b64] = String(chavePublica).split(".");
+    const der = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    const key = await crypto.subtle.importKey("spki", der, { name: "RSA-OAEP", hash: "SHA-256" }, false, ["encrypt"]);
+    const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "RSA-OAEP" }, key, new TextEncoder().encode(senha)));
+    let bin = ""; ct.forEach((b) => bin += String.fromCharCode(b));
+    return fp + "." + btoa(bin);
+  }
+
+  async function carregarInteg() {
+    const [c, a, l] = await Promise.all([
+      sb.from("integracao_config").select("*").eq("id", 1).maybeSingle(),
+      sb.from("integracao_agente").select("*").eq("id", 1).maybeSingle(),
+      sb.from("integracao_log").select("*").order("inicio", { ascending: false }).limit(200),
+    ]);
+    const err = c.error || a.error || l.error;
+    if (err) throw err;
+    integ = { cfg: c.data || { id: 1, rotinas: {}, porta: 1521, modo: "thin", intervalo_min: 60, hora_inicio: 6, hora_fim: 20, ativo: true }, agente: a.data, logs: l.data || [] };
+  }
+
+  async function renderInteg() {
+    const box = el("tab-integ");
+    box.innerHTML = `<div class="card card-pad"><span class="spinner dark"></span> Carregando…</div>`;
+    try { await carregarInteg(); }
+    catch (e) {
+      box.innerHTML = `<div class="card card-pad"><h2>Integração Winthor</h2>
+        <div class="msg err">${/does not exist|schema cache|relation/i.test(e.message)
+          ? "As tabelas da integração ainda não existem. Execute o arquivo <b>schema_integracao.sql</b> no SQL Editor do Supabase (uma vez) e recarregue esta página."
+          : esc(e.message)}</div></div>`;
+      return;
+    }
+    const { cfg, agente, logs } = integ;
+    const online = agenteOnline(agente), rotAg = rotinasDoAgente(agente);
+    const senhaOutroAgente = cfg.senha_cifrada && agente?.chave_publica && fpDe(cfg.senha_cifrada) !== fpDe(agente.chave_publica);
+    const ultimoOk = (id) => logs.find((l) => l.rotina === id && l.status === "ok");
+    const ultimo = (id) => logs.find((l) => l.rotina === id);
+    const params = (r) => ({ ...r.padrao, ...((cfg.rotinas || {})[r.id] || {}) });
+    const statusAgente = !agente?.chave_publica
+      ? `<span class="badge gray">não instalado</span>`
+      : online ? `<span class="badge ok">online</span>` : `<span class="badge bad">offline</span>`;
+
+    box.innerHTML = `
+      <div class="card card-pad" style="margin-bottom:16px">
+        <div class="row" style="justify-content:space-between">
+          <h2 style="margin:0">Agente no computador ${statusAgente}</h2>
+          <button class="btn ghost sm" id="igRecarregar">Atualizar</button>
+        </div>
+        ${agente?.chave_publica ? `
+          <div class="sub" style="margin:8px 0 0;display:grid;gap:4px">
+            <div><b>Computador:</b> ${esc(agente.computador || "—")} · <b>versão</b> ${esc(agente.versao || "—")}</div>
+            <div><b>Último sinal:</b> ${agente.ultimo_sinal ? fmtDT(agente.ultimo_sinal) + " (" + tempoAtras(agente.ultimo_sinal) + ")" : "—"}
+              · <b>Oracle:</b> ${agente.oracle_ok === true ? `<span class="badge ok">conectado</span>` : agente.oracle_ok === false ? `<span class="badge bad">com erro</span>` : `<span class="badge gray">não testado</span>`}</div>
+            ${agente.mensagem && agente.mensagem !== "OK" ? `<div><b>Mensagem:</b> <span class="muted">${esc(agente.mensagem)}</span></div>` : ""}
+          </div>
+          ${!online ? `<div class="msg err" style="margin-bottom:0">O agente não dá sinal há mais de 3 minutos. Verifique se o computador está ligado e se o <b>INICIAR.bat</b> (ou o serviço) está rodando.</div>` : ""}`
+        : `<div class="msg info" style="margin-bottom:0">O agente ainda não se conectou. No computador que acessa o Winthor, abra a pasta <b>winthor-sync</b> e dê dois cliques em <b>INICIAR.bat</b>. Use um login com perfil <b>Administrador</b> (ex.: <span class="mono">integracao</span>, criado na aba Usuários).</div>`}
+      </div>
+
+      <div class="card card-pad" style="margin-bottom:16px">
+        <h2>Conexão com o banco do Winthor (Oracle)</h2>
+        <p class="sub">A senha é criptografada <b>neste navegador</b> com a chave do agente e só pode ser aberta pelo computador onde ele está instalado. Ela nunca volta para a tela.</p>
+        ${senhaOutroAgente ? `<div class="msg err">A senha salva foi criptografada para outro computador/agente. Digite a senha novamente e salve.</div>` : ""}
+        <div class="form-grid">
+          <div class="field"><label>Servidor (IP ou nome)</label><input type="text" id="igHost" value="${esc(cfg.host || "")}" placeholder="192.168.0.10"></div>
+          <div class="field"><label>Porta</label><input type="number" id="igPorta" value="${esc(cfg.porta ?? 1521)}"></div>
+          <div class="field"><label>Service name / SID</label><input type="text" id="igServico" value="${esc(cfg.servico || "")}" placeholder="WINT"></div>
+          <div class="field"><label>&nbsp;</label><label class="chk"><input type="checkbox" id="igSid" ${cfg.usar_sid ? "checked" : ""}> É um SID</label></div>
+          <div class="field"><label>Usuário do banco</label><input type="text" id="igUsuario" value="${esc(cfg.usuario || "")}" autocomplete="off"></div>
+          <div class="field"><label>Senha do banco</label><input type="password" id="igSenha" autocomplete="new-password" placeholder="${cfg.senha_cifrada && !senhaOutroAgente ? "•••••• salva (em branco = manter)" : "não definida"}"></div>
+          <div class="field"><label>Versão do Oracle</label><select id="igModo">
+            <option value="thin" ${cfg.modo !== "thick" ? "selected" : ""}>12c ou superior (padrão)</option>
+            <option value="thick" ${cfg.modo === "thick" ? "selected" : ""}>11g (exige Instant Client)</option></select></div>
+          <div class="field" id="igIcBox" ${cfg.modo === "thick" ? "" : "hidden"}><label>Pasta do Instant Client</label><input type="text" id="igIc" value="${esc(cfg.instant_client || "")}" placeholder="C:\\oracle\\instantclient_21_13"></div>
+        </div>
+        <div id="igDbMsg"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn" id="igSalvarDb">Salvar conexão</button>
+          <button class="btn ghost" id="igTestar">Testar conexão</button>
+          <span class="muted" id="igDbStatus" style="font-size:13px"></span>
+        </div>
+      </div>
+
+      <div class="card card-pad" style="margin-bottom:16px">
+        <h2>Rotinas sincronizadas</h2>
+        <p class="sub">Cada rotina substitui a base correspondente, exatamente como o upload da planilha. Supervisores separados por vírgula.</p>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Ativa</th><th>Rotina</th><th>Supervisores</th><th>Última sincronização</th><th></th></tr></thead>
+          <tbody>${INTEG_ROTINAS.map((r) => {
+            const p = params(r), ok = ultimoOk(r.id), ul = ultimo(r.id);
+            const semSelect = rotAg && !rotAg.includes(r.rotina);
+            return `<tr>
+              <td><input type="checkbox" data-ig-ativo="${r.id}" ${p.ativo !== false ? "checked" : ""}></td>
+              <td><b>${r.rotina}</b> · ${esc(r.nome)}<div class="muted" style="font-size:12px">${esc(r.destino)}</div>
+                ${semSelect ? `<span class="badge warn">SELECT ainda não cadastrado no agente</span>` : ""}</td>
+              <td style="min-width:170px"><input type="text" data-ig-sup="${r.id}" value="${esc((p.supervisores || []).join(", "))}">
+                ${"filial" in r.padrao ? `<div class="row muted" style="gap:6px;margin-top:6px;font-size:12px">Filial <input type="number" data-ig-filial="${r.id}" value="${esc(p.filial)}" style="width:64px"> Meses <input type="number" data-ig-meses="${r.id}" value="${esc(p.meses)}" style="width:72px"></div>` : ""}</td>
+              <td style="font-size:13px">${ok ? `${fmtDT(ok.inicio)} <span class="muted">(${tempoAtras(ok.inicio)})</span><div class="muted">${fmtInt.format(ok.linhas || 0)} registros</div>` : `<span class="muted">nunca</span>`}
+                ${ul && ul.status === "erro" ? `<div><span class="badge bad" title="${esc(ul.mensagem || "")}">erro ${fmtDT(ul.inicio)}</span></div>` : ""}
+                ${ul && ul.status === "executando" ? `<div><span class="badge warn">sincronizando…</span></div>` : ""}</td>
+              <td><button class="btn ghost sm" data-ig-sync="${r.id}" ${semSelect ? "disabled" : ""}>Sincronizar agora</button></td>
+            </tr>`; }).join("")}
+          </tbody>
+        </table></div>
+        <div class="form-grid" style="margin-top:14px">
+          <div class="field"><label>Sincronizar automaticamente a cada (min, 0 = só manual)</label><input type="number" id="igIntervalo" min="0" value="${esc(cfg.intervalo_min ?? 60)}"></div>
+          <div class="field"><label>Das (hora)</label><input type="number" id="igIni" min="0" max="23" value="${esc(cfg.hora_inicio ?? 6)}"></div>
+          <div class="field"><label>Até (hora)</label><input type="number" id="igFim" min="1" max="24" value="${esc(cfg.hora_fim ?? 20)}"></div>
+          <div class="field"><label>&nbsp;</label><label class="chk"><input type="checkbox" id="igAtivo" ${cfg.ativo !== false ? "checked" : ""}> Sincronização automática ligada</label></div>
+        </div>
+        <div id="igRotMsg"></div>
+        <div class="row" style="margin-top:10px">
+          <button class="btn" id="igSalvarRot">Salvar rotinas e horários</button>
+          <button class="btn ghost" id="igSyncTodas">Sincronizar todas agora</button>
+          <span class="muted" id="igRotStatus" style="font-size:13px"></span>
+        </div>
+      </div>
+
+      <div class="card card-pad">
+        <h2>Histórico</h2>
+        <div class="table-wrap"><table>
+          <thead><tr><th>Início</th><th>Rotina</th><th>Origem</th><th>Situação</th><th class="num">Registros</th><th>Detalhe</th></tr></thead>
+          <tbody>${logs.slice(0, 30).map((l) => {
+            const r = INTEG_ROTINAS.find((x) => x.id === l.rotina);
+            const b = l.status === "ok" ? "ok" : l.status === "erro" ? "bad" : "warn";
+            return `<tr><td>${fmtDT(l.inicio)}</td><td>${r ? r.rotina : esc(l.rotina)}</td><td>${esc(l.origem || "")}</td>
+              <td><span class="badge ${b}">${esc(l.status)}</span></td><td class="num">${l.linhas != null ? fmtInt.format(l.linhas) : ""}</td>
+              <td style="font-size:12.5px;max-width:420px;white-space:normal">${esc(l.mensagem || "")}</td></tr>`; }).join("") || `<tr><td colspan="6" class="empty">Nenhuma sincronização ainda.</td></tr>`}
+          </tbody>
+        </table></div>
+      </div>`;
+
+    el("igRecarregar").onclick = renderInteg;
+    el("igModo").onchange = () => { el("igIcBox").hidden = el("igModo").value !== "thick"; };
+    el("igSalvarDb").onclick = () => salvarConexao().catch((e) => showMsg(el("igDbMsg"), e.message, "err"));
+    el("igTestar").onclick = async () => {
+      try {
+        if (el("igSenha").value || !integ.cfg.senha_cifrada) await salvarConexao(true);
+        await enviarComando("testar", null, el("igDbStatus"), el("igDbMsg"));
+      } catch (e) { showMsg(el("igDbMsg"), e.message, "err"); }
+    };
+    el("igSalvarRot").onclick = () => salvarRotinas().catch((e) => showMsg(el("igRotMsg"), e.message, "err"));
+    el("igSyncTodas").onclick = () => enviarComando("sincronizar", null, el("igRotStatus"), el("igRotMsg")).catch((e) => showMsg(el("igRotMsg"), e.message, "err"));
+    box.querySelectorAll("[data-ig-sync]").forEach((b) => b.onclick = () =>
+      enviarComando("sincronizar", b.dataset.igSync, el("igRotStatus"), el("igRotMsg")).catch((e) => showMsg(el("igRotMsg"), e.message, "err")));
+  }
+
+  async function salvarConexao(silencioso) {
+    const senha = el("igSenha").value;
+    const dados = {
+      id: 1, host: el("igHost").value.trim(), porta: Number(el("igPorta").value) || 1521, servico: el("igServico").value.trim(),
+      usar_sid: el("igSid").checked, usuario: el("igUsuario").value.trim(), modo: el("igModo").value,
+      instant_client: el("igIc").value.trim() || null, atualizado_em: new Date().toISOString(), atualizado_por: ctx.session.user.id,
+    };
+    if (!dados.host || !dados.servico || !dados.usuario) throw new Error("Preencha servidor, service name/SID e usuário.");
+    if (senha) {
+      if (!integ.agente?.chave_publica) throw new Error("Instale e inicie o agente no computador antes de salvar a senha (a senha é criptografada com a chave dele).");
+      dados.senha_cifrada = await cifrarSenhaOracle(senha, integ.agente.chave_publica);
+    } else if (!integ.cfg.senha_cifrada) throw new Error("Informe a senha do banco.");
+    const { error } = await sb.from("integracao_config").upsert(dados);
+    if (error) throw error;
+    el("igSenha").value = "";
+    Object.assign(integ.cfg, dados);
+    if (!silencioso) { showMsg(el("igDbMsg"), "Conexão salva.", "ok"); setTimeout(renderInteg, 1200); }
+  }
+
+  async function salvarRotinas() {
+    const rotinas = { ...(integ.cfg.rotinas || {}) };
+    for (const r of INTEG_ROTINAS) {
+      const p = { ativo: document.querySelector(`[data-ig-ativo="${r.id}"]`).checked,
+        supervisores: document.querySelector(`[data-ig-sup="${r.id}"]`).value.split(/[,;\s]+/).filter(Boolean).map(Number).filter(Number.isFinite) };
+      if (!p.supervisores.length) throw new Error(`Informe ao menos um supervisor na rotina ${r.rotina}.`);
+      const f = document.querySelector(`[data-ig-filial="${r.id}"]`), m = document.querySelector(`[data-ig-meses="${r.id}"]`);
+      if (f) p.filial = Number(f.value) || 1;
+      if (m) p.meses = Number(m.value) || 60;
+      rotinas[r.id] = p;
+    }
+    const dados = { id: 1, rotinas, intervalo_min: Math.max(0, Number(el("igIntervalo").value) || 0),
+      hora_inicio: Number(el("igIni").value) || 0, hora_fim: Number(el("igFim").value) || 24, ativo: el("igAtivo").checked,
+      atualizado_em: new Date().toISOString(), atualizado_por: ctx.session.user.id };
+    const { error } = await sb.from("integracao_config").upsert(dados);
+    if (error) throw error;
+    Object.assign(integ.cfg, dados);
+    showMsg(el("igRotMsg"), "Rotinas e horários salvos. As próximas sincronizações usam estes parâmetros.", "ok");
+  }
+
+  async function enviarComando(tipo, rotina, statusEl, msgEl) {
+    showMsg(msgEl, "");
+    if (!agenteOnline(integ.agente)) showMsg(msgEl, "Atenção: o agente está offline — o pedido fica na fila e roda quando ele voltar.", "err");
+    const { data, error } = await sb.from("integracao_comandos").insert({ tipo, rotina }).select("id").single();
+    if (error) throw error;
+    statusEl.innerHTML = `<span class="spinner dark"></span> ${tipo === "testar" ? "Testando conexão…" : "Sincronizando (pode levar alguns minutos)…"}`;
+    clearInterval(integPoll);
+    const inicio = Date.now();
+    integPoll = setInterval(async () => {
+      const { data: c } = await sb.from("integracao_comandos").select("*").eq("id", data.id).maybeSingle();
+      if (!c) return;
+      if (c.status === "ok" || c.status === "erro") {
+        clearInterval(integPoll); statusEl.textContent = "";
+        showMsg(msgEl, (c.status === "ok" ? "" : "Erro: ") + (c.resultado || "Concluído."), c.status === "ok" ? "ok" : "err");
+        msgEl.firstElementChild && (msgEl.firstElementChild.style.whiteSpace = "pre-line");
+        setTimeout(async () => { const m = msgEl.innerHTML, st = msgEl.id; await renderInteg(); el(st).innerHTML = m; }, 800);
+      } else if (c.status === "pendente" && Date.now() - inicio > 60000) {
+        statusEl.textContent = "Aguardando o agente pegar o pedido…";
+      }
+      if (Date.now() - inicio > 30 * 60 * 1000) clearInterval(integPoll);
+    }, 3000);
   }
 
   // =====================================================================

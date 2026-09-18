@@ -26,6 +26,7 @@ schema.sql          → script que cria tudo no Supabase
 schema_roteiro.sql  → tabela e permissões do roteiro (executar depois do schema.sql)
 metas.html          → metas do mês por vendedor e por cliente
 schema_metas.sql    → tabela "vendas" e funções das metas (executar depois do schema.sql)
+schema_integracao.sql → integração automática com o Winthor (executar depois dos demais)
 ```
 
 ## Instalação (uma vez só, ~10 min)
@@ -106,3 +107,21 @@ Base = venda do **mesmo mês do ano anterior**; se esse mês não estiver na pla
 2. **Administração → Metas (vendas)** tem dois uploads:
    - **Venda do ano passado (set, out, nov e dez)** → **Relatório 8238** em .csv (colunas QTD_LIQ_SET_2025, VLR_LIQ_SET_2025, … por mês).
    - **Venda por cliente do mês atual** → **Relatório 8239** em .csv (MES_REFERENCIA, QTD_LIQUIDA, VALOR_VENDA_LIQUIDA). Recarregue sempre que quiser atualizar o "quanto falta".
+
+## Integração automática com o Winthor (sem planilhas)
+
+Um **agente** instalado num computador da empresa que acessa o Oracle do Winthor roda os SELECTs das rotinas e grava direto nas tabelas do Supabase. São as mesmas tabelas que os uploads de planilha alimentam, então as telas do site não mudam. O agente só faz conexões de saída, por isso não é preciso abrir portas nem usar um túnel.
+
+| Rotina | Base atualizada |
+|---|---|
+| 8235 | Consulta mix (`mix`) |
+| 8236 | Roteiro promotor, Roteiro vendedor e Clientes (`roteiro`, `roteiro_vendedor`, `clientes`) |
+| 8238 | Metas: venda do ano passado (`vendas`, origem hist) |
+| 8239 | Metas: venda do mês atual (`vendas`, origem atual). Falta cadastrar o SELECT |
+
+1. Execute `schema_integracao.sql` no SQL Editor do Supabase (uma vez).
+2. Em **Administração → Usuários**, crie o usuário `integracao` com perfil **Administrador**.
+3. No computador do Winthor, abra a pasta **winthor-sync** e rode **INICIAR.bat**. Ele pede o login `integracao` na primeira vez. Depois, instale como serviço com **INSTALAR-SERVICO.bat**.
+4. Em **Administração → Integração Winthor**, preencha servidor, porta, service name, usuário e senha do Oracle. Clique em **Testar conexão**, ajuste os supervisores e horários de cada rotina e use **Sincronizar agora**.
+
+A senha do Oracle é criptografada no navegador com a chave pública do agente, e só o agente consegue abri-la. O upload manual de planilhas continua funcionando como alternativa.
