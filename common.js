@@ -82,6 +82,7 @@
       `<a href="clientes.html" class="${active === "clientes" ? "active" : ""}">Clientes</a>`,
       `<a href="metas.html" class="${active === "metas" ? "active" : ""}">Metas</a>`,
       `<a href="app.html">App de campo</a>`,
+      `<a href="baixar.html">Baixar app</a>`,
       profile.role === "admin" ? `<a href="admin.html" class="${active === "admin" ? "active" : ""}">Administração</a>` : "",
     ].join("");
     return `

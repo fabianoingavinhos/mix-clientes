@@ -30,6 +30,7 @@
           <div class="field"><label>Senha</label><input type="password" id="lp" autocomplete="current-password" required></div>
           <div id="lm"></div>
           <button class="btn block" id="lb">Entrar</button>
+          ${window.Capacitor ? "" : `<a href="baixar.html" style="display:block;text-align:center;margin-top:14px;font-size:14px">📲 Baixar o app para Android</a>`}
         </form>
       </div>`;
     el("lf").onsubmit = async (e) => {

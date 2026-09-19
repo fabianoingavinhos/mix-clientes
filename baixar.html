@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#7a1f2b">
+<title>Baixar o app Mix Campo</title>
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  body { background: linear-gradient(160deg, #7a1f2b 0%, #4c1019 60%, #2b0a0f 100%); min-height: 100vh; margin: 0; }
+  .wrap { max-width: 520px; margin: 0 auto; padding: 28px 16px 40px; }
+  .card { background: #fff; border-radius: 16px; padding: 24px 22px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+  .topo { display: flex; gap: 14px; align-items: center; }
+  .topo img { width: 64px; height: 64px; border-radius: 14px; }
+  .topo h1 { margin: 0; font-size: 22px; }
+  .topo p { margin: 2px 0 0; color: var(--muted); font-size: 14px; }
+  .baixar { display: block; text-align: center; margin: 20px 0 8px; padding: 15px; font-size: 17px; border-radius: 12px; }
+  .info { text-align: center; color: var(--muted); font-size: 13px; min-height: 18px; }
+  ol { padding-left: 20px; line-height: 1.6; font-size: 14.5px; }
+  h2 { font-size: 15px; margin: 22px 0 6px; }
+  .qr { display: none; text-align: center; margin-top: 18px; }
+  .qr #qr { display: inline-block; padding: 10px; background: #fff; border: 1px solid var(--line); border-radius: 12px; }
+  .qr p { color: var(--muted); font-size: 13px; }
+  @media (min-width: 800px) { .qr { display: block; } }
+  .rodape { text-align: center; margin-top: 16px; font-size: 13px; }
+  .rodape a { color: #fff; opacity: .85; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <div class="topo">
+      <img src="icons/icon-192.png" alt="">
+      <div><h1>Mix Campo</h1><p>App do vendedor e do supervisor · Android</p></div>
+    </div>
+
+    <a class="btn baixar" id="baixar" href="https://github.com/fabianoingavinhos/mix-clientes/releases/download/apk-latest/mix-campo.apk">⬇ Baixar o app (APK)</a>
+    <div class="info" id="info">Sempre a versão mais recente.</div>
+
+    <div class="qr"><div id="qr"></div><p>No computador? Aponte a câmera do celular para o código.</p></div>
+
+    <h2>Como instalar</h2>
+    <ol>
+      <li>Toque em <b>Baixar o app</b> e espere o download terminar.</li>
+      <li>Abra o arquivo <b>mix-campo.apk</b> (na notificação ou em Downloads).</li>
+      <li>Se o celular pedir, permita <b>instalar apps desta fonte</b> e volte.</li>
+      <li>Toque em <b>Instalar</b> e depois em <b>Abrir</b>.</li>
+      <li>Entre com o mesmo usuário e senha do site.</li>
+      <li>Quando o app pedir, permita a <b>localização "o tempo todo"</b> e as <b>notificações</b>. É o que registra as visitas sozinho.</li>
+    </ol>
+
+    <h2>Versão nova</h2>
+    <p style="font-size:14.5px;margin:0">Quando sair uma versão nova, é só baixar por este mesmo link e instalar por cima; o login continua. As telas e os dados do app se atualizam sozinhos, sem precisar baixar de novo.</p>
+  </div>
+  <div class="rodape"><a href="index.html">Ir para o site</a> · <a href="app.html">Usar no navegador</a></div>
+</div>
+<script>
+  (async () => {
+    const url = location.href.replace(/[?#].*$/, "");
+    if (window.QRCode) new QRCode(document.getElementById("qr"), { text: url, width: 160, height: 160, colorDark: "#2b0a0f" });
+    try {
+      const r = await fetch("https://api.github.com/repos/fabianoingavinhos/mix-clientes/releases/tags/apk-latest", { cache: "no-store" });
+      if (!r.ok) return;
+      const j = await r.json();
+      const a = (j.assets || []).find((x) => x.name.endsWith(".apk"));
+      const v = (j.body || "").match(/Versao\s+([\d.]+)/i);
+      const quando = new Date(a ? a.updated_at : j.published_at).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+      document.getElementById("info").textContent = `${v ? "Versão " + v[1] + " · " : ""}publicada em ${quando}${a ? " · " + (a.size / 1048576).toFixed(1).replace(".", ",") + " MB" : ""}`;
+    } catch (_) {}
+  })();
+</script>
+</body>
+</html>

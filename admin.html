@@ -998,7 +998,7 @@
       </div>
 
       ${cardAppCampo()}
-      ${cardConector("fusion", "Fusion — entregas", "Pedidos em rota, entregues, não entregues e ocorrências. Consultado a cada poucos minutos; o vendedor recebe aviso quando o status muda.")}
+      ${cardFusion()}
       ${cardConector("promotor_rede", "Promotor na Rede — visitas, fotos e contagem", "Visitas do promotor do dia (chegada/saída), link das fotos e contagem de estoque das lojas.")}
 
       <div class="card card-pad">
@@ -1016,7 +1016,7 @@
       </div>`;
 
     el("igRecarregar").onclick = renderInteg;
-    ligarAppCampo(); ligarConector("fusion"); ligarConector("promotor_rede");
+    ligarAppCampo(); ligarFusion(); ligarConector("promotor_rede");
     el("igModo").onchange = () => { el("igIcBox").hidden = el("igModo").value !== "thick"; };
     el("igSalvarDb").onclick = () => salvarConexao().catch((e) => showMsg(el("igDbMsg"), e.message, "err"));
     el("igTestar").onclick = async () => {
@@ -1063,6 +1063,64 @@
       if (error) return showMsg(el("acMsg"), /does not exist|schema cache/i.test(error.message) ? "Execute schema_app.sql no Supabase primeiro." : error.message, "err");
       Object.assign(appCfg, dados); showMsg(el("acMsg"), "Configuração do app salva.", "ok");
     };
+  }
+
+  // ---------- Fusion: banco Oracle direto (entregas) ----------
+  const FUSION_PADRAO = { host: "142.0.64.10", porta: 1521, servico: "C14OUE_137603_W_high.paas.oracle.com", servico_alt: "C14OUE_137603_W_low.paas.oracle.com", usuario: "FUSIONT", schema: "FUSIONT", dias: 15, intervalo_min: 5 };
+  function cardFusion() {
+    const c = { ...FUSION_PADRAO, ...(integ.cfg.fusion || {}) };
+    const direto = c.modo === "oracle";
+    const ult = (integ.logs || []).find((l) => l.rotina === "fusion");
+    return `<div class="card card-pad" style="margin-bottom:16px">
+        <div class="row" style="justify-content:space-between"><h2 style="margin:0">Fusion — entregas (banco de dados)</h2>
+          ${direto && c.ativo ? `<span class="badge ok">direto no Oracle do Fusion</span>` : c.arquivo && c.ativo ? `<span class="badge warn">lendo o arquivo do BI</span>` : `<span class="badge gray">desligado</span>`}</div>
+        <p class="sub">O agente consulta o Oracle do Fusion (FUSIONTRAK_INT_CARGA, CARGA_ENT e EVENTOS) e atualiza as entregas do app: em rota, entregue, não entregue e ocorrência. Cliente e motorista são completados pelo Winthor. A senha é criptografada neste navegador com a chave do agente.</p>
+        <div class="form-grid">
+          <div class="field"><label>Servidor</label><input type="text" id="fuHost" value="${esc(c.host)}"></div>
+          <div class="field"><label>Porta</label><input type="number" id="fuPorta" value="${esc(c.porta)}"></div>
+          <div class="field" style="grid-column:span 2"><label>Serviço</label><input type="text" id="fuServ" value="${esc(c.servico)}"></div>
+          <div class="field" style="grid-column:span 2"><label>Serviço alternativo (se o principal falhar)</label><input type="text" id="fuServAlt" value="${esc(c.servico_alt || "")}"></div>
+          <div class="field"><label>Usuário</label><input type="text" id="fuUser" value="${esc(c.usuario)}" autocomplete="off"></div>
+          <div class="field"><label>Schema (dono das tabelas)</label><input type="text" id="fuSchema" value="${esc(c.schema)}"></div>
+          <div class="field"><label>Senha do Fusion</label><input type="password" id="fuSenha" autocomplete="new-password" placeholder="${c.senha_cifrada ? "•••••• salva (em branco = manter)" : "não definida"}"></div>
+          <div class="field"><label>Dias de histórico</label><input type="number" id="fuDias" value="${esc(c.dias)}"></div>
+          <div class="field"><label>Atualizar a cada (min)</label><input type="number" id="fuInt" value="${esc(c.intervalo_min)}"></div>
+          <div class="field"><label>&nbsp;</label><label class="chk"><input type="checkbox" id="fuAtivo" ${c.ativo ? "checked" : ""}> Ligado</label></div>
+        </div>
+        ${ult ? `<div class="sub" style="margin:4px 0 8px">Última atualização: ${fmtDT(ult.inicio)} — ${ult.status === "erro" ? `<span style="color:var(--bad)">${esc(ult.mensagem || "erro")}</span>` : esc(ult.mensagem || ult.status || "")}</div>` : ""}
+        <div id="fuMsg"></div>
+        <div class="row" style="margin-top:6px;gap:8px;flex-wrap:wrap">
+          <button class="btn" id="fuSalvar">Salvar Fusion</button>
+          <button class="btn ghost" id="fuTestar">Testar conexão</button>
+          <button class="btn ghost" id="fuSync">Sincronizar agora</button>
+          <span class="muted" id="fuStatus"></span>
+        </div>
+      </div>`;
+  }
+  function ligarFusion() {
+    const msg = el("fuMsg");
+    el("fuSalvar").onclick = async () => {
+      try {
+        const atual = integ.cfg.fusion || {};
+        const c = { ...atual, modo: "oracle", ativo: el("fuAtivo").checked, host: el("fuHost").value.trim(), porta: Number(el("fuPorta").value) || 1521,
+          servico: el("fuServ").value.trim(), servico_alt: el("fuServAlt").value.trim(), usuario: el("fuUser").value.trim(), schema: el("fuSchema").value.trim() || el("fuUser").value.trim(),
+          dias: Number(el("fuDias").value) || 15, intervalo_min: Number(el("fuInt").value) || 5 };
+        delete c.arquivo; delete c.url;
+        const senha = el("fuSenha").value;
+        if (senha) {
+          if (!integ.agente?.chave_publica) throw new Error("Inicie o agente antes de salvar a senha (ela é criptografada com a chave do agente).");
+          c.senha_cifrada = await cifrarSenhaOracle(senha, integ.agente.chave_publica);
+        }
+        if (c.ativo && !c.senha_cifrada) throw new Error("Informe a senha do Fusion para ligar a integração.");
+        if (!c.host || !c.servico || !c.usuario) throw new Error("Preencha servidor, serviço e usuário.");
+        const { error } = await sb.from("integracao_config").update({ fusion: c, atualizado_em: new Date().toISOString() }).eq("id", 1);
+        if (error) throw new Error(/column|schema cache/i.test(error.message) ? "Execute schema_app.sql no Supabase primeiro." : error.message);
+        integ.cfg.fusion = c; el("fuSenha").value = "";
+        showMsg(msg, "Fusion salvo. O agente passa a consultar o banco do Fusion direto no próximo ciclo (sem depender do BI).", "ok");
+      } catch (e) { showMsg(msg, e.message, "err"); }
+    };
+    el("fuTestar").onclick = () => enviarComando("testar", "fusion", el("fuStatus"), msg).catch((e) => showMsg(msg, e.message, "err"));
+    el("fuSync").onclick = () => enviarComando("sincronizar", "fusion", el("fuStatus"), msg).catch((e) => showMsg(msg, e.message, "err"));
   }
 
   // ---------- Conectores Fusion / Promotor na Rede ----------
