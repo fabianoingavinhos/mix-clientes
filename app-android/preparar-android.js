@@ -22,4 +22,12 @@ fs.writeFileSync(mf, xml);
 // nome e cor do app
 const strings = path.join(__dirname, 'android', 'app', 'src', 'main', 'res', 'values', 'strings.xml');
 if (fs.existsSync(strings)) fs.writeFileSync(strings, fs.readFileSync(strings, 'utf8').replace(/<string name="app_name">[^<]*</, '<string name="app_name">Mix Campo<').replace(/<string name="title_activity_main">[^<]*</, '<string name="title_activity_main">Mix Campo<'));
-console.log('AndroidManifest ajustado.');
+// versao: cada build do GitHub Actions ganha um numero maior (o Android so atualiza por cima se o versionCode subir)
+const gradle = path.join(__dirname, 'android', 'app', 'build.gradle');
+const run = parseInt(process.env.GITHUB_RUN_NUMBER || '1', 10);
+if (fs.existsSync(gradle)) {
+  fs.writeFileSync(gradle, fs.readFileSync(gradle, 'utf8')
+    .replace(/versionCode\s+\d+/, `versionCode ${run}`)
+    .replace(/versionName\s+"[^"]*"/, `versionName "1.0.${run}"`));
+}
+console.log(`AndroidManifest ajustado. Versao 1.0.${run} (${run}).`);
