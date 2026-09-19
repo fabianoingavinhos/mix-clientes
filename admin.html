@@ -865,6 +865,9 @@
     { id: "vendas_hist", rotina: 8238, nome: "Venda do ano passado (set a dez)", destino: "Metas", padrao: { ativo: true, supervisores: [2, 7, 9, 14, 17] } },
     { id: "vendas_atual", rotina: 8239, nome: "Venda do mês atual", destino: "Metas", padrao: { ativo: true, supervisores: [2, 7, 9, 14, 17] } },
     { id: "vendas_3m", rotina: "V3M", nome: "Venda dos últimos 3 meses por cliente", destino: "Clientes", padrao: { ativo: true, supervisores: [2, 7, 9, 14, 17] } },
+    { id: "app_pedidos", rotina: "APP-PED", nome: "Pedidos do mês (positivação e faturamento)", destino: "App de campo · a cada 15 min", padrao: { ativo: true, supervisores: [2, 7, 9, 14, 17], intervalo_min: 15 } },
+    { id: "app_geo", rotina: "APP-GEO", nome: "Localização das lojas (Winthor)", destino: "App de campo · presença automática", padrao: { ativo: true, supervisores: [2, 7, 9, 14, 17, 18], intervalo_min: 720 } },
+    { id: "app_metas", rotina: "APP-META", nome: "Metas por vendedor (Winthor)", destino: "App de campo · alertas do supervisor", padrao: { ativo: true, supervisores: [2, 7, 9, 14, 17], intervalo_min: 360 } },
   ];
   let integ = { cfg: null, agente: null, logs: [] };
   let integPoll = null;
@@ -894,6 +897,7 @@
     const err = c.error || a.error || l.error;
     if (err) throw err;
     integ = { cfg: c.data || { id: 1, rotinas: {}, porta: 1521, modo: "thin", intervalo_min: 60, hora_inicio: 6, hora_fim: 20, ativo: true }, agente: a.data, logs: l.data || [] };
+    appCfg = (await sb.from("app_config").select("*").eq("id", 1).maybeSingle()).data || {};
   }
 
   async function renderInteg() {
@@ -993,6 +997,10 @@
         </div>
       </div>
 
+      ${cardAppCampo()}
+      ${cardConector("fusion", "Fusion — entregas", "Pedidos em rota, entregues, não entregues e ocorrências. Consultado a cada poucos minutos; o vendedor recebe aviso quando o status muda.")}
+      ${cardConector("promotor_rede", "Promotor na Rede — visitas, fotos e contagem", "Visitas do promotor do dia (chegada/saída), link das fotos e contagem de estoque das lojas.")}
+
       <div class="card card-pad">
         <h2>Histórico</h2>
         <div class="table-wrap"><table>
@@ -1000,7 +1008,7 @@
           <tbody>${logs.slice(0, 30).map((l) => {
             const r = INTEG_ROTINAS.find((x) => x.id === l.rotina);
             const b = l.status === "ok" ? "ok" : l.status === "erro" ? "bad" : "warn";
-            return `<tr><td>${fmtDT(l.inicio)}</td><td>${r ? r.rotina : esc(l.rotina)}</td><td>${esc(l.origem || "")}</td>
+            return `<tr><td>${fmtDT(l.inicio)}</td><td>${r ? r.rotina : ({ fusion: "Fusion", promotor_rede: "Promotor na Rede" }[l.rotina] || esc(l.rotina))}</td><td>${esc(l.origem || "")}</td>
               <td><span class="badge ${b}">${esc(l.status)}</span></td><td class="num">${l.linhas != null ? fmtInt.format(l.linhas) : ""}</td>
               <td style="font-size:12.5px;max-width:420px;white-space:normal">${esc(l.mensagem || "")}</td></tr>`; }).join("") || `<tr><td colspan="6" class="empty">Nenhuma sincronização ainda.</td></tr>`}
           </tbody>
@@ -1008,6 +1016,7 @@
       </div>`;
 
     el("igRecarregar").onclick = renderInteg;
+    ligarAppCampo(); ligarConector("fusion"); ligarConector("promotor_rede");
     el("igModo").onchange = () => { el("igIcBox").hidden = el("igModo").value !== "thick"; };
     el("igSalvarDb").onclick = () => salvarConexao().catch((e) => showMsg(el("igDbMsg"), e.message, "err"));
     el("igTestar").onclick = async () => {
@@ -1020,6 +1029,82 @@
     el("igSyncTodas").onclick = () => enviarComando("sincronizar", null, el("igRotStatus"), el("igRotMsg")).catch((e) => showMsg(el("igRotMsg"), e.message, "err"));
     box.querySelectorAll("[data-ig-sync]").forEach((b) => b.onclick = () =>
       enviarComando("sincronizar", b.dataset.igSync, el("igRotStatus"), el("igRotMsg")).catch((e) => showMsg(el("igRotMsg"), e.message, "err")));
+  }
+
+
+  // ---------- App de campo (app_config) ----------
+  let appCfg = {};
+  function cardAppCampo() {
+    const c = appCfg;
+    return `<div class="card card-pad" style="margin-bottom:16px">
+        <div class="row" style="justify-content:space-between"><h2 style="margin:0">App de campo (vendedor e supervisor)</h2><a class="btn ghost sm" href="app.html" target="_blank">Abrir o app ↗</a></div>
+        <p class="sub">Presença automática nas lojas (sem check-in) e alertas do supervisor. O agente envia os resumos nos horários abaixo, nos dias úteis.</p>
+        <div class="form-grid">
+          <div class="field"><label>Raio da loja (metros)</label><input type="number" id="acRaio" value="${esc(c.raio_padrao_m ?? 80)}"></div>
+          <div class="field"><label>Permanência para contar visita (min)</label><input type="number" id="acPerm" step="0.5" value="${esc(c.permanencia_min ?? 3)}"></div>
+          <div class="field"><label>Localização: das (hora)</label><input type="number" id="acIni" value="${esc(c.hora_inicio ?? 6)}"></div>
+          <div class="field"><label>até (hora)</label><input type="number" id="acFim" value="${esc(c.hora_fim ?? 20)}"></div>
+          <div class="field"><label>Dias úteis (0=dom … 6=sáb)</label><input type="text" id="acDias" value="${esc(c.dias_uteis ?? "1,2,3,4,5,6")}"></div>
+          <div class="field"><label>Horários dos alertas</label><input type="text" id="acAlertas" value="${esc(c.alertas_horarios ?? "07:00,11:50,16:50")}"></div>
+          <div class="field"><label>Meta de visitas/dia (vazio = roteiro)</label><input type="number" id="acMetaVis" value="${esc(c.meta_visitas_dia ?? "")}"></div>
+          <div class="field"><label>Notificações push</label><div class="sub" style="margin:8px 0 0">${c.vapid_public ? `<span class="badge ok">prontas</span>` : `<span class="badge gray">aguardando o agente</span>`}</div></div>
+        </div>
+        <div id="acMsg"></div>
+        <div class="row" style="margin-top:6px"><button class="btn" id="acSalvar">Salvar app de campo</button></div>
+      </div>`;
+  }
+  function ligarAppCampo() {
+    el("acSalvar").onclick = async () => {
+      const dados = { id: 1, raio_padrao_m: Number(el("acRaio").value) || 80, permanencia_min: Number(el("acPerm").value) || 3,
+        hora_inicio: Number(el("acIni").value) || 0, hora_fim: Number(el("acFim").value) || 24, dias_uteis: el("acDias").value.trim() || "1,2,3,4,5,6",
+        alertas_horarios: el("acAlertas").value.split(",").map((x) => x.trim()).filter((x) => /^\d{1,2}:\d{2}$/.test(x)).map((x) => x.padStart(5, "0")).join(","),
+        meta_visitas_dia: el("acMetaVis").value ? Number(el("acMetaVis").value) : null, atualizado_em: new Date().toISOString() };
+      const { error } = await sb.from("app_config").upsert(dados);
+      if (error) return showMsg(el("acMsg"), /does not exist|schema cache/i.test(error.message) ? "Execute schema_app.sql no Supabase primeiro." : error.message, "err");
+      Object.assign(appCfg, dados); showMsg(el("acMsg"), "Configuração do app salva.", "ok");
+    };
+  }
+
+  // ---------- Conectores Fusion / Promotor na Rede ----------
+  function cardConector(id, titulo, desc) {
+    const c = integ.cfg[id] || {};
+    const js = (v) => v && Object.keys(v).length ? JSON.stringify(v, null, 1) : "";
+    return `<div class="card card-pad" style="margin-bottom:16px">
+        <div class="row" style="justify-content:space-between"><h2 style="margin:0">${titulo}</h2>${c.ativo ? `<span class="badge ok">ligado</span>` : `<span class="badge gray">desligado</span>`}</div>
+        <p class="sub">${desc} O token é criptografado neste navegador com a chave do agente.</p>
+        <div class="form-grid">
+          <div class="field" style="grid-column:1/-1"><label>URL da API (use {data} para a data de hoje)</label><input type="text" id="cn_${id}_url" value="${esc(c.url || "")}" placeholder="https://api.exemplo.com/entregas?data={data}"></div>
+          <div class="field"><label>Token / chave de API</label><input type="password" id="cn_${id}_tok" autocomplete="new-password" placeholder="${c.token_cifrado ? "•••••• salvo (em branco = manter)" : "não definido"}"></div>
+          <div class="field"><label>Cabeçalho do token</label><input type="text" id="cn_${id}_hdr" value="${esc(c.token_cabecalho || "Authorization")}"></div>
+          <div class="field"><label>Caminho da lista na resposta</label><input type="text" id="cn_${id}_lista" value="${esc(c.lista || "")}" placeholder="ex.: data.items"></div>
+          <div class="field"><label>Atualizar a cada (min)</label><input type="number" id="cn_${id}_int" value="${esc(c.intervalo_min || 5)}"></div>
+          <div class="field" style="grid-column:1/-1"><label>Mapa de campos (JSON: campo do app → campo da API)</label><textarea id="cn_${id}_mapa" rows="4" style="width:100%;font-family:monospace;font-size:12px" placeholder='{"chave":"id","codcli":"cliente.codigo","status":"situacao"}'>${esc(js(c.mapa))}</textarea></div>
+          <div class="field" style="grid-column:1/-1"><label>Tradução de status (JSON: valor da API → status do app)</label><textarea id="cn_${id}_st" rows="2" style="width:100%;font-family:monospace;font-size:12px" placeholder='{"EM ROTA":"em_rota","ENTREGUE":"entregue"}'>${esc(js(c.status))}</textarea></div>
+          <div class="field"><label>&nbsp;</label><label class="chk"><input type="checkbox" id="cn_${id}_ativo" ${c.ativo ? "checked" : ""}> Ligado</label></div>
+        </div>
+        <div id="cn_${id}_msg"></div>
+        <div class="row" style="margin-top:6px"><button class="btn" id="cn_${id}_salvar">Salvar conector</button></div>
+      </div>`;
+  }
+  function ligarConector(id) {
+    el(`cn_${id}_salvar`).onclick = async () => {
+      const msg = el(`cn_${id}_msg`);
+      try {
+        const atual = integ.cfg[id] || {};
+        const lerJson = (x, nome) => { const v = el(x).value.trim(); if (!v) return {}; try { return JSON.parse(v); } catch (_) { throw new Error(`${nome}: JSON inválido.`); } };
+        const c = { ...atual, ativo: el(`cn_${id}_ativo`).checked, url: el(`cn_${id}_url`).value.trim(), token_cabecalho: el(`cn_${id}_hdr`).value.trim() || "Authorization",
+          lista: el(`cn_${id}_lista`).value.trim(), intervalo_min: Number(el(`cn_${id}_int`).value) || 5, mapa: lerJson(`cn_${id}_mapa`, "Mapa de campos"), status: lerJson(`cn_${id}_st`, "Tradução de status") };
+        const tok = el(`cn_${id}_tok`).value;
+        if (tok) {
+          if (!integ.agente?.chave_publica) throw new Error("Inicie o agente antes de salvar o token (ele é criptografado com a chave do agente).");
+          c.token_cifrado = await cifrarSenhaOracle(tok, integ.agente.chave_publica);
+        }
+        if (c.ativo && !c.url) throw new Error("Informe a URL para ligar o conector.");
+        const { error } = await sb.from("integracao_config").update({ [id]: c, atualizado_em: new Date().toISOString() }).eq("id", 1);
+        if (error) throw new Error(/column|schema cache/i.test(error.message) ? "Execute schema_app.sql no Supabase primeiro." : error.message);
+        integ.cfg[id] = c; el(`cn_${id}_tok`).value = ""; showMsg(msg, "Conector salvo. O agente usa a nova configuração no próximo ciclo.", "ok");
+      } catch (e) { showMsg(msg, e.message, "err"); }
+    };
   }
 
   async function salvarConexao(silencioso) {
@@ -1050,6 +1135,7 @@
       const f = document.querySelector(`[data-ig-filial="${r.id}"]`), m = document.querySelector(`[data-ig-meses="${r.id}"]`);
       if (f) p.filial = Number(f.value) || 1;
       if (m) p.meses = Number(m.value) || 60;
+      if (r.padrao.intervalo_min) p.intervalo_min = (integ.cfg.rotinas?.[r.id]?.intervalo_min) || r.padrao.intervalo_min;
       rotinas[r.id] = p;
     }
     const dados = { id: 1, rotinas, intervalo_min: Math.max(0, Number(el("igIntervalo").value) || 0),
