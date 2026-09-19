@@ -1,0 +1,46 @@
+# Gera o APK do Mix Campo (Android) sempre que a pasta app-android mudar, ou manualmente (Actions > Run workflow).
+# O APK fica em Releases > "Mix Campo (Android)".
+name: App Android (APK)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['app-android/**', '.github/workflows/android.yml', 'icons/**']
+permissions:
+  contents: write
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: android-actions/setup-android@v3
+      - name: Gerar projeto Android
+        working-directory: app-android
+        run: |
+          which convert || (sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick)
+          npm install --no-audit --no-fund
+          npx cap add android
+          node preparar-android.js
+          # icone do app a partir de icons/icon-512.png
+          for d in mipmap-mdpi:48 mipmap-hdpi:72 mipmap-xhdpi:96 mipmap-xxhdpi:144 mipmap-xxxhdpi:192; do
+            dir=${d%%:*}; px=${d##*:}
+            convert ../icons/icon-512.png -resize ${px}x${px} android/app/src/main/res/$dir/ic_launcher.png
+            convert ../icons/icon-512.png -resize ${px}x${px} android/app/src/main/res/$dir/ic_launcher_round.png
+            convert ../icons/icon-512.png -resize ${px}x${px} android/app/src/main/res/$dir/ic_launcher_foreground.png
+          done
+          npx cap sync android
+      - name: Compilar APK
+        working-directory: app-android/android
+        run: ./gradlew assembleDebug --no-daemon
+      - name: Publicar APK
+        env: { GH_TOKEN: '${{ secrets.GITHUB_TOKEN }}' }
+        run: |
+          cp app-android/android/app/build/outputs/apk/debug/app-debug.apk mix-campo.apk
+          gh release delete apk-latest --yes --cleanup-tag || true
+          gh release create apk-latest mix-campo.apk --title "Mix Campo (Android)" --notes "APK gerado automaticamente em $(date -u +'%d/%m/%Y %H:%M') UTC. No celular: baixe, abra e permita instalar de fontes desconhecidas."
+      - uses: actions/upload-artifact@v4
+        with: { name: mix-campo-apk, path: mix-campo.apk }
