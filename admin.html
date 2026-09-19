@@ -1066,7 +1066,7 @@
   }
 
   // ---------- Fusion: banco Oracle direto (entregas) ----------
-  const FUSION_PADRAO = { host: "142.0.64.10", porta: 1521, servico: "C14OUE_137603_W_high.paas.oracle.com", servico_alt: "C14OUE_137603_W_low.paas.oracle.com", usuario: "FUSIONT", schema: "FUSIONT", dias: 15, intervalo_min: 5 };
+  const FUSION_PADRAO = { host: "142.0.64.10", porta: 1521, servico: "C14OUE_137603_W_high.paas.oracle.com", servico_alt: "C14OUE_137603_W_low.paas.oracle.com", usuario: "", schema: "FUSIONT", dias: 15, intervalo_min: 5 };
   function cardFusion() {
     const c = { ...FUSION_PADRAO, ...(integ.cfg.fusion || {}) };
     const direto = c.modo === "oracle";
