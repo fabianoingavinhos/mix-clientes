@@ -49,7 +49,7 @@
     sel: SUP ? LS.get("mc.sel", "") : String(P.cod_vendedor),
     clientes: [], cli: new Map(), geo: new Map(), rotVend: [], rotProm: [], pedidos: [], presencas: [], entregas: [], promVisitas: [],
     metasV: [], metaCalc: new Map(), notifs: [], mix: null, carregadoEm: null, erroCarga: null,
-    rota: location.hash.replace("#", "") || "inicio", promDia: hoje(), entFiltro: "todos", entDias: 1, desPeriodo: "hoje", oppFiltro: "roteiro"
+    rota: decodeURIComponent(location.hash.replace("#", "")) || "inicio", promDia: hoje(), entFiltro: "todos", entDias: 1, desPeriodo: "hoje", oppFiltro: "roteiro"
   };
 
   async function tudo(tabela, cols, filtro) {
@@ -225,13 +225,49 @@
   }
 
   // ------------------------------------------------------------------ casco
+  // Telas completas do site, abertas dentro do app (menu lateral no computador, "Mais" no celular)
+  const PAGINAS = [
+    ["index.html", "🧾", "Consulta mix", "Mix de produtos por cliente, sugestão de pedido e metas"],
+    ["clientes.html", "🏪", "Clientes", "Carteira com venda dos últimos meses"],
+    ["roteiro.html?tipo=vendedor", "🧭", "Roteiro vendedor", "Visitas planejadas por vendedor"],
+    ["roteiro.html", "🗂️", "Roteiro promotor", "Lojas e frequência do promotor"],
+    ["metas.html", "📈", "Metas", "Meta do mês por cliente e por vendedor"]
+  ];
+  const nomePagina = (pg) => (PAGINAS.find((x) => x[0] === pg) || (pg.startsWith("admin.html") ? [0, "⚙️", "Administração"] : [0, "📄", pg]))[2];
+  const ROTAS_CAMPO = [
+    ["inicio", "🏠", "Início"], ["roteiro", "🗺️", "Roteiro do dia"], ["promotor", "📸", "Promotor"], ["entregas", "🚚", "Entregas"],
+    ["desempenho", "📊", "Desempenho"], ["oportunidades", "💡", "Oportunidades"]
+  ];
+  function lateral() {
+    const on = (r) => S.rota === r ? "on" : "";
+    const link = (href, i, n, cls = "", extra = "") => `<a href="${href}" class="${cls}" ${extra}><span class="i">${i}</span><span>${n}</span></a>`;
+    const nl = S.notifs.filter((n) => !n.lida_em).length;
+    return `<aside class="side">
+      <div class="side-top"><div class="mark">M</div><div><b>${esc(Mix.cfg.EMPRESA || "Mix Clientes")}</b><small>App de campo</small></div></div>
+      <div class="grp">No campo</div>
+      ${ROTAS_CAMPO.map(([r, i, n]) => link("#" + r, i, n + (r === "entregas" && contEntregasProblema() ? ` <em>${contEntregasProblema()}</em>` : ""), on(r))).join("")}
+      ${SUP ? link("#equipe", "👥", "Equipe", on("equipe")) : ""}
+      ${link("#avisos", "🔔", "Avisos" + (nl ? ` <em>${nl}</em>` : ""), on("avisos"))}
+      <div class="grp">Consultas e relatórios</div>
+      ${PAGINAS.map(([pg, i, n]) => link("#pg/" + pg, i, n, on("pg/" + pg))).join("")}
+      ${P.role === "admin" ? `<div class="grp">Gestão</div>${link("#pg/admin.html", "⚙️", "Administração", S.rota.startsWith("pg/admin.html") ? "on" : "")}` : ""}
+      <div class="side-fim">
+        ${link("baixar.html", "📲", "Baixar app Android", "", 'target="_blank" rel="noopener"')}
+        <a href="#" id="sSenha"><span class="i">🔑</span><span>Trocar senha</span></a>
+        <a href="#" id="sSair"><span class="i">↩</span><span>Sair</span></a>
+      </div>
+    </aside>`;
+  }
+
   const ROTAS = [
     ["inicio", "🏠", "Início"], ["roteiro", "🗺️", "Roteiro"], ["promotor", "📸", "Promotor"], ["entregas", "🚚", "Entregas"], ["mais", "☰", "Mais"]
   ];
   function casco() {
     const naoLidas = S.notifs.filter((n) => !n.lida_em).length;
     const vs = vendedores();
-    root.innerHTML = `
+    const PG = S.rota.startsWith("pg/");
+    document.body.classList.toggle("modo-pg", PG);
+    root.innerHTML = `${lateral()}
       <header class="ap-top">
         <div class="l1">
           <div class="mark">M</div>
@@ -239,23 +275,44 @@
           <button class="ic" id="btAvisos" title="Avisos">🔔${naoLidas ? `<span class="dot">${naoLidas}</span>` : ""}</button>
           <button class="ic" id="btAtual" title="Atualizar">⟳</button>
         </div>
-        ${SUP ? `<select id="selVend"><option value="">Toda a equipe (${vs.length} vendedores)</option>${vs.map(([c, n]) => `<option value="${c}" ${String(S.sel) === String(c) ? "selected" : ""}>${esc(n)} (${c})</option>`).join("")}</select>` : ""}
+        ${SUP && !PG ? `<select id="selVend"><option value="">Toda a equipe (${vs.length} vendedores)</option>${vs.map(([c, n]) => `<option value="${c}" ${String(S.sel) === String(c) ? "selected" : ""}>${esc(n)} (${c})</option>`).join("")}</select>` : ""}
         <div class="ap-gps" id="gpsLinha"></div>
       </header>
       <main class="ap-main" id="tela"></main>
-      <nav class="navb">${ROTAS.map(([id, i, n]) => `<a href="#${id}" data-r="${id}" class="${S.rota === id || (id === "mais" && ["desempenho", "oportunidades", "equipe", "avisos"].includes(S.rota)) ? "on" : ""}"><span class="i">${i}</span>${n}${id === "entregas" && contEntregasProblema() ? `<span class="n">${contEntregasProblema()}</span>` : ""}</a>`).join("")}</nav>`;
+      <nav class="navb">${ROTAS.map(([id, i, n]) => `<a href="#${id}" data-r="${id}" class="${S.rota === id || (id === "mais" && (["desempenho", "oportunidades", "equipe", "avisos"].includes(S.rota) || PG)) ? "on" : ""}"><span class="i">${i}</span>${n}${id === "entregas" && contEntregasProblema() ? `<span class="n">${contEntregasProblema()}</span>` : ""}</a>`).join("")}</nav>`;
     el("btAvisos").onclick = () => ir("avisos");
+    el("sSair").onclick = (e) => { e.preventDefault(); Mix.logout(); };
+    el("sSenha").onclick = (e) => { e.preventDefault(); Mix.trocarSenha(); };
     el("btAtual").onclick = async () => { el("btAtual").textContent = "…"; await carregar(); casco(); render(); };
     el("selVend")?.addEventListener("change", (e) => { S.sel = e.target.value; LS.set("mc.sel", S.sel); render(); });
     pintarGps();
   }
   const contEntregasProblema = () => S.entregas.filter((e) => doEscopo(e) && e.data_ref === hoje() && ["nao_entregue", "ocorrencia", "devolvida"].includes(e.status)).length;
   function ir(r) { if (location.hash !== "#" + r) location.hash = r; else { S.rota = r; casco(); render(); } }
-  window.addEventListener("hashchange", () => { S.rota = location.hash.replace("#", "") || "inicio"; casco(); render(); window.scrollTo(0, 0); });
+  window.addEventListener("hashchange", () => {
+    const nova = decodeURIComponent(location.hash.replace("#", "")) || "inicio";
+    // mesma tela do site já aberta: não recarrega o iframe
+    if (nova === S.rota && nova.startsWith("pg/")) return;
+    S.rota = nova; fecharFolha(); casco(); render(); window.scrollTo(0, 0);
+  });
+
+  // ------------------------------------------------------------------ TELAS DO SITE DENTRO DO APP
+  function telaPagina(t, pg) {
+    const base = pg.split("?")[0];
+    if (base === "admin.html" && P.role !== "admin") { t.innerHTML = `<div class="vazio">Disponível só para o administrador.</div>`; return; }
+    const src = pg + (pg.includes("?") ? "&" : "?") + "embed=1";
+    const solo = pg + (pg.includes("?") ? "&" : "?") + "solo=1";
+    t.innerHTML = `<div class="pg-bar"><b>${esc(nomePagina(pg))}</b><a href="${esc(solo)}" target="_blank" rel="noopener">abrir em tela cheia ↗</a></div>
+      <iframe class="pg-frame" id="pgFrame" src="${esc(src)}" title="${esc(nomePagina(pg))}"></iframe>`;
+    const f = el("pgFrame");
+    const ajustar = () => { const top = f.getBoundingClientRect().top; const nav = document.querySelector(".navb"); const nb = nav && getComputedStyle(nav).display !== "none" ? nav.offsetHeight : 0; f.style.height = Math.max(420, window.innerHeight - top - nb - 8) + "px"; };
+    ajustar(); window.onresize = ajustar;
+  }
 
   function render() {
     const t = el("tela"); if (!t) return;
     if (S.erroCarga) { t.innerHTML = `<div class="msg err">${esc(S.erroCarga)}</div>`; return; }
+    if (S.rota.startsWith("pg/")) return telaPagina(t, S.rota.slice(3));
     const f = { inicio: telaInicio, roteiro: telaRoteiro, promotor: telaPromotor, entregas: telaEntregas, mais: telaMais, desempenho: telaDesempenho, oportunidades: telaOportunidades, equipe: telaEquipe, avisos: telaAvisos }[S.rota] || telaInicio;
     f(t);
   }
@@ -424,9 +481,14 @@
       ${[["desempenho", "📊", "Desempenho", "Visitas presenciais × não visitadas, positivação"], ["oportunidades", "💡", "Oportunidades e estoque", "Recompra atrasada e estoque baixo nas lojas"],
          ...(SUP ? [["equipe", "👥", "Equipe", "Ranking de metas, visitas e positivação"]] : []), ["avisos", "🔔", "Avisos", "Resumos e atualizações recebidas"]]
         .map(([r, i, n, d]) => `<div class="it" data-go="${r}"><div class="st">${i}</div><div class="bd"><div class="t">${n}</div><div class="d">${d}</div></div><div class="rt">›</div></div>`).join("")}
+      <div class="ap-h" style="margin:14px 12px 6px">Consultas e relatórios</div>
+      ${PAGINAS.map(([pg, i, n, d]) => `<a class="it" href="#pg/${pg}"><div class="st">${i}</div><div class="bd"><div class="t">${n}</div><div class="d">${d}</div></div><div class="rt">›</div></a>`).join("")}
+      ${P.role === "admin" ? `<a class="it" href="#pg/admin.html"><div class="st">⚙️</div><div class="bd"><div class="t">Administração</div><div class="d">Usuários, integração Winthor e Fusion</div></div><div class="rt">›</div></a>` : ""}
+      <div class="ap-h" style="margin:14px 12px 6px">Aparelho</div>
       <div class="it" id="mPush"><div class="st">📲</div><div class="bd"><div class="t">Ativar notificações</div><div class="d">${LS.get("mc.push", false) ? "Ativadas neste aparelho ✔" : "Receba entregas, promotor e resumos do dia"}</div></div></div>
       <div class="it" id="mGps"><div class="st">📍</div><div class="bd"><div class="t">Presença automática</div><div class="d">${G.watch != null ? "Ligada ✔ — deixe o app aberto na rota" : "Desligada — toque para ativar"}</div></div></div>
-      <a class="it" href="index.html"><div class="st">🧾</div><div class="bd"><div class="t">Consulta de mix</div><div class="d">Site completo</div></div><div class="rt">›</div></a>
+      <a class="it" href="baixar.html"><div class="st">📲</div><div class="bd"><div class="t">Baixar o app Android</div><div class="d">Link para instalar ou atualizar</div></div><div class="rt">›</div></a>
+      <div class="it" id="mSenha"><div class="st">🔑</div><div class="bd"><div class="t">Trocar minha senha</div></div></div>
       <div class="it" id="mSair"><div class="st">↩</div><div class="bd"><div class="t">Sair</div></div></div>
     </div>
     <p class="muted" style="font-size:12px;text-align:center;margin-top:14px">A localização só é usada em horário de trabalho (${S.cfg.hora_inicio}h–${S.cfg.hora_fim}h) para registrar visitas às lojas.</p>`;
@@ -434,6 +496,7 @@
     el("mPush").onclick = ativarPush;
     el("mGps").onclick = () => { iniciarGps(); render(); };
     el("mSair").onclick = () => Mix.logout();
+    el("mSenha").onclick = () => Mix.trocarSenha();
   }
 
   // ------------------------------------------------------------------ DESEMPENHO
@@ -595,7 +658,7 @@
       <div class="acts" style="margin:10px 0;display:flex;gap:6px;flex-wrap:wrap">
         ${c.telefone ? `<a class="chip" href="tel:${esc(String(c.telefone).replace(/\D/g, ""))}">📞 Ligar</a>` : ""}
         ${maps ? `<a class="chip" href="${maps}" target="_blank" rel="noopener">🧭 Rota</a>` : ""}
-        <a class="chip" href="index.html?cli=${codcli}">🧾 Mix do cliente</a>
+        <a class="chip" href="#pg/index.html?cli=${codcli}">🧾 Mix do cliente</a>
         ${pv ? `<span class="chip" id="fPv">📸 Promotor ${fmtDate(pv.data).slice(0, 5)}</span>` : ""}
       </div>
       ${!g || g.origem === "aprendido" ? `<div class="aviso-gps">${g ? "Localização aprendida no app." : "<b>Loja sem localização.</b> Sem ela o app não registra a visita presencial."}<br><button class="btn sm" id="salvarGeo">📍 Estou na loja — salvar localização</button> <span class="muted" id="geoMsg" style="font-size:12px"></span></div>` : ""}

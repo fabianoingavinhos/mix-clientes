@@ -250,3 +250,7 @@ tbody tr.has-qtd input.qtd { border-color: var(--warn); font-weight: 700; }
   .pedido-bar .pb-actions { width: 100%; }
   .pedido-bar .pb-actions .btn { flex: 1; justify-content: center; }
 }
+
+/* Tela aberta dentro do App de campo (sem a barra de cima; o menu é o do app) */
+html.embed .wrap { padding-top: 14px; }
+html.embed .topbar { display: none; }

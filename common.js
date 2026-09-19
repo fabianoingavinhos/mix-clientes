@@ -7,6 +7,18 @@
 
   const sb = configured ? window.supabase.createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY) : null;
 
+  // As telas do site abrem DENTRO do App de campo (menu lateral). Aberta direto, a página vai para o app;
+  // "?solo=1" abre sozinha (tela cheia). Dentro do app (iframe) some a barra de cima, o menu é o do app.
+  const QS = new URLSearchParams(location.search);
+  const PAGINA = (location.pathname.split("/").pop() || "index.html").toLowerCase();
+  let EMBED = false;
+  try { EMBED = window.top !== window || QS.has("embed"); } catch (_) { EMBED = true; }
+  const TELAS_NO_APP = ["index.html", "roteiro.html", "clientes.html", "metas.html", "admin.html"];
+  if (!EMBED && !QS.has("solo") && TELAS_NO_APP.includes(PAGINA)) {
+    location.replace("app.html#pg/" + PAGINA + location.search);
+  }
+  if (EMBED) document.documentElement.classList.add("embed");
+
   const LOGIN_DOMAIN = "@mix.app";
   const fmtBRL = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
   const fmtNum = new Intl.NumberFormat("pt-BR", { maximumFractionDigits: 2 });
@@ -58,7 +70,7 @@
 
   async function logout() {
     await sb.auth.signOut();
-    location.href = "index.html";
+    (window.top || window).location.href = "app.html";
   }
 
   /** Requer sessão; redireciona para login se não houver. Retorna {session, profile}. */
@@ -69,12 +81,13 @@
       throw new Error("not configured");
     }
     const ctx = await getSessionProfile();
-    if (!ctx) { location.href = "index.html"; throw new Error("no session"); }
+    if (!ctx) { (window.top || window).location.href = "app.html"; throw new Error("no session"); }
     if (opts.adminOnly && ctx.profile.role !== "admin") { location.href = "index.html"; throw new Error("forbidden"); }
     return ctx;
   }
 
   function renderTopbar(profile, active) {
+    if (EMBED) return "";
     const nav = [
       `<a href="index.html" class="${active === "app" ? "active" : ""}">Consulta mix</a>`,
       `<a href="roteiro.html" class="${active === "roteiro" ? "active" : ""}">Roteiro promotor</a>`,
@@ -104,7 +117,11 @@
     const nav = document.querySelector(".topbar nav"), act = nav?.querySelector("a.active");
     if (nav && act && nav.scrollWidth > nav.clientWidth) nav.scrollLeft += act.getBoundingClientRect().left - nav.getBoundingClientRect().left - (nav.clientWidth - act.offsetWidth) / 2;
     el("btnSair")?.addEventListener("click", logout);
-    el("btnSenha")?.addEventListener("click", () => {
+    el("btnSenha")?.addEventListener("click", trocarSenha);
+  }
+
+  function trocarSenha() {
+    {
       openModal(`
         <h3>Trocar minha senha</h3>
         <div class="field"><label>Nova senha</label><input type="password" id="np1" autocomplete="new-password"></div>
@@ -119,7 +136,7 @@
         if (error) return showMsg(el("npMsg"), error.message, "err");
         closeModal(); toast("Senha alterada com sucesso.");
       };
-    });
+    }
   }
 
   function openModal(html) {
@@ -248,6 +265,6 @@
   }
 
   window.Mix = { sb, configured, cfg, fmtBRL, fmtNum, fmtInt, fmtDate, statusClass, esc, el, showMsg, ROLE_LABEL,
-    getSessionProfile, login, logout, requireAuth, renderTopbar, bindTopbar, openModal, closeModal, toast, protegerDados, perfilRestrito,
+    getSessionProfile, login, logout, requireAuth, renderTopbar, bindTopbar, trocarSenha, EMBED, openModal, closeModal, toast, protegerDados, perfilRestrito,
     METAS_PCT, fmtMes, nomeMes, metaDe, calcMeta, metaBadge, metaLabel, metaSelos };
 })();
