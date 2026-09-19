@@ -1,0 +1,14 @@
+{
+  "appId": "br.com.ingavinhos.mixcampo",
+  "appName": "Mix Campo",
+  "webDir": "www",
+  "server": {
+    "url": "https://fabianoingavinhos.github.io/mix-clientes/app.html",
+    "cleartext": false,
+    "allowNavigation": ["fabianoingavinhos.github.io", "mix-ingavinhos.onrender.com", "*.supabase.co"]
+  },
+  "android": { "allowMixedContent": false },
+  "plugins": {
+    "LocalNotifications": { "smallIcon": "ic_launcher_foreground", "iconColor": "#7a1f2b" }
+  }
+}

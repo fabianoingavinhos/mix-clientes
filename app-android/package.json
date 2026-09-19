@@ -1,0 +1,15 @@
+{
+  "name": "mix-campo-android",
+  "version": "1.0.0",
+  "private": true,
+  "description": "App Android do Mix Campo (abre o app.html publicado e adiciona localizacao em segundo plano)",
+  "dependencies": {
+    "@capacitor/android": "^6.1.2",
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/local-notifications": "^6.1.0",
+    "@capacitor-community/background-geolocation": "^1.2.19"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2"
+  }
+}
