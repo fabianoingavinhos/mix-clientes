@@ -467,7 +467,7 @@
           <div class="d">${s[2]}${e.numped ? " · pedido " + e.numped : ""}${e.numnota ? " · NF " + e.numnota : ""}${e.valor ? " · " + brl(e.valor) : ""}</div>
           <div class="d">${e.entregue_em ? "entregue " + hm(e.entregue_em) : e.saida_em ? "saiu " + hm(e.saida_em) : ""}${e.previsao && e.status === "em_rota" ? " · previsão " + hm(e.previsao) : ""}${e.motorista ? " · " + esc(e.motorista) : ""}${e.veiculo ? " · " + esc(e.veiculo) : ""}</div>
           ${e.ocorrencia ? `<div class="d" style="color:var(--bad)">⚠ ${esc(e.ocorrencia)}</div>` : ""}
-          ${e.comprovante ? `<div class="acts"><a class="chip" href="${esc(e.comprovante)}" target="_blank" rel="noopener">📄 Comprovante</a></div>` : ""}
+          ${e.comprovante || e.canhoto_em ? `<div class="acts">${e.comprovante ? `<a class="chip" href="${esc(e.comprovante)}" target="_blank" rel="noopener">📄 Ver canhoto</a>` : `<span class="chip">📄 Canhoto enviado ${hm(e.canhoto_em)}</span>`}</div>` : ""}
         </div><div class="rt">${hm(e.atualizado_em)}</div></div>`; }).join("") ||
         `<div class="vazio">${S.entregas.length ? "Nenhuma entrega neste filtro." : "As entregas aparecem aqui quando a integração com o <b>Fusion</b> estiver ligada."}</div>`}</div>`;
     t.querySelectorAll("[data-d]").forEach((x) => x.onclick = () => { S.entDias = +x.dataset.d; render(); });
@@ -666,7 +666,7 @@
         <tr><th>Última compra</th><td>${fmtDate(c.ultima_compra)}${c.dias_sem_comprar != null ? ` (${c.dias_sem_comprar} dias)` : ""}</td></tr>
         <tr><th>Visitas presenciais</th><td>${pres.map((p) => `${fmtDate(p.data).slice(0, 5)} ${hm(p.inicio)} (${dur(p.duracao_seg)})`).join("<br>") || "—"}</td></tr>
         <tr><th>Pedidos no mês</th><td>${peds.map((p) => `${fmtDate(p.data).slice(0, 5)} · ${brl(p.valor)}${p.posicao ? " · " + esc(p.posicao) : ""}`).join("<br>") || "—"}</td></tr>
-        <tr><th>Entregas</th><td>${ents.map((e) => `${(ENT[e.status] || ENT.pendente)[2]}${e.ocorrencia ? " — " + esc(e.ocorrencia) : ""}`).join("<br>") || "—"}</td></tr>
+        <tr><th>Entregas</th><td>${ents.map((e) => `${(ENT[e.status] || ENT.pendente)[2]}${e.ocorrencia ? " — " + esc(e.ocorrencia) : ""}${e.comprovante ? ` · <a href="${esc(e.comprovante)}" target="_blank" rel="noopener">📄 canhoto</a>` : e.canhoto_em ? ` · 📄 canhoto ${hm(e.canhoto_em)}` : ""}`).join("<br>") || "—"}</td></tr>
       </tbody></table>
       ${pv && (pv.contagem || []).length ? `<h3 style="margin-top:14px">Contagem do promotor (${fmtDate(pv.data)})</h3>${tabelaContagem(pv)}` : ""}`);
     el("fPv")?.addEventListener("click", () => abrirPromotor(pv.chave, "fotos"));
