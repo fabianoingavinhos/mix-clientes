@@ -999,6 +999,7 @@
 
       ${cardAppCampo()}
       ${cardFusion()}
+      ${cardPromoVisita()}
       ${cardConector("promotor_rede", "Promotor na Rede — visitas, fotos e contagem", "Visitas do promotor do dia (chegada/saída), link das fotos e contagem de estoque das lojas.")}
 
       <div class="card card-pad">
@@ -1016,7 +1017,7 @@
       </div>`;
 
     el("igRecarregar").onclick = renderInteg;
-    ligarAppCampo(); ligarFusion(); ligarConector("promotor_rede");
+    ligarAppCampo(); ligarFusion(); ligarPromoVisita(); ligarConector("promotor_rede");
     el("igModo").onchange = () => { el("igIcBox").hidden = el("igModo").value !== "thick"; };
     el("igSalvarDb").onclick = () => salvarConexao().catch((e) => showMsg(el("igDbMsg"), e.message, "err"));
     el("igTestar").onclick = async () => {
@@ -1096,6 +1097,49 @@
           <span class="muted" id="fuStatus"></span>
         </div>
       </div>`;
+  }
+  const PV_PADRAO = { ativo: false, pasta: "C:/Users/fabia/Documents/SISTEMAS INGA - FABRICIO/inga-promovisita/inga-promovisita/sync-winthor", bucket: "fotos-visitas", dias: 30, intervalo_min: 10, validade_dias: 7 };
+  function cardPromoVisita() {
+    const c = { ...PV_PADRAO, ...(integ.cfg.promovisita || {}) };
+    const ult = (integ.logs || []).find((l) => l.rotina === "promovisita");
+    return `<div class="card card-pad" style="margin-bottom:16px">
+        <div class="row" style="justify-content:space-between"><h2 style="margin:0">PromoVisita — roteiro do promotor</h2>
+          ${c.ativo ? `<span class="badge ok">ligado</span>` : `<span class="badge gray">desligado</span>`}</div>
+        <p class="sub">O agente lê o banco do PromoVisita e traz, para cada loja, a visita do promotor: visitado ou não, horário, fotos e a contagem de estoque. Tudo fica restrito à carteira de cada vendedor. As fotos ficam num bucket privado — o agente gera um link temporário, renovado a cada sincronização. A chave de acesso é lida do próprio <b>.env</b> do sync do PromoVisita neste computador; nada de secreto é guardado aqui.</p>
+        <div class="form-grid">
+          <div class="field" style="grid-column:span 2"><label>Pasta do sync do PromoVisita (onde está o .env)</label><input type="text" id="pvPasta" value="${esc(c.pasta)}"></div>
+          <div class="field"><label>Bucket das fotos</label><input type="text" id="pvBucket" value="${esc(c.bucket)}"></div>
+          <div class="field"><label>Dias de histórico</label><input type="number" id="pvDias" value="${esc(c.dias)}"></div>
+          <div class="field"><label>Atualizar a cada (min)</label><input type="number" id="pvInt" value="${esc(c.intervalo_min)}"></div>
+          <div class="field"><label>Link da foto vale (dias)</label><input type="number" id="pvVal" value="${esc(c.validade_dias)}"></div>
+          <div class="field"><label>&nbsp;</label><label class="chk"><input type="checkbox" id="pvAtivo" ${c.ativo ? "checked" : ""}> Ligado</label></div>
+        </div>
+        ${ult ? `<div class="sub" style="margin:4px 0 8px">Última atualização: ${fmtDT(ult.inicio)} — ${ult.status === "erro" ? `<span style="color:var(--bad)">${esc(ult.mensagem || "erro")}</span>` : esc(ult.mensagem || ult.status || "")}</div>` : ""}
+        <div id="pvMsg"></div>
+        <div class="row" style="margin-top:6px;gap:8px;flex-wrap:wrap">
+          <button class="btn" id="pvSalvar">Salvar PromoVisita</button>
+          <button class="btn ghost" id="pvTestar">Testar conexão</button>
+          <button class="btn ghost" id="pvSync">Sincronizar agora</button>
+          <span class="muted" id="pvStatus"></span>
+        </div>
+      </div>`;
+  }
+  function ligarPromoVisita() {
+    const msg = el("pvMsg");
+    el("pvSalvar").onclick = async () => {
+      try {
+        const c = { ...(integ.cfg.promovisita || {}), ativo: el("pvAtivo").checked, pasta: el("pvPasta").value.trim(),
+          bucket: el("pvBucket").value.trim() || "fotos-visitas", dias: Number(el("pvDias").value) || 30,
+          intervalo_min: Number(el("pvInt").value) || 10, validade_dias: Number(el("pvVal").value) || 7 };
+        if (c.ativo && !c.pasta) throw new Error("Informe a pasta do sync do PromoVisita (a que tem o arquivo .env).");
+        const { error } = await sb.from("integracao_config").update({ promovisita: c, atualizado_em: new Date().toISOString() }).eq("id", 1);
+        if (error) throw new Error(/column|schema cache/i.test(error.message) ? "Execute schema_app.sql no Supabase primeiro." : error.message);
+        integ.cfg.promovisita = c;
+        showMsg(msg, "PromoVisita salvo. As visitas do promotor entram no app no próximo ciclo.", "ok");
+      } catch (e) { showMsg(msg, e.message, "err"); }
+    };
+    el("pvTestar").onclick = () => enviarComando("testar", "promovisita", el("pvStatus"), msg).catch((e) => showMsg(msg, e.message, "err"));
+    el("pvSync").onclick = () => enviarComando("sincronizar", "promovisita", el("pvStatus"), msg).catch((e) => showMsg(msg, e.message, "err"));
   }
   function ligarFusion() {
     const msg = el("fuMsg");

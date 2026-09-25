@@ -427,12 +427,14 @@
     ligarCliques(t);
   }
 
+  const FOTO_TIPO = { fachada: "fachada", ponto_extra: "ponto extra", promocao: "promoção", secao_antes: "seção (antes)", secao_depois: "seção (depois)" };
   function abrirPromotor(chave, o) {
     const v = S.promVisitas.find((x) => x.chave === chave); if (!v) return;
     const fotos = v.fotos || [];
     folha(`<h3>${esc(nomeCli(v.codcli))}</h3><div class="muted">${esc(v.promotor || "")} · ${fmtDate(v.data)} · ${hm(v.checkin)}–${hm(v.checkout)}</div>
       ${o !== "contagem" ? `${v.link_fotos ? `<p><a class="btn sm" href="${esc(v.link_fotos)}" target="_blank" rel="noopener">Abrir fotos no Promotor na Rede ↗</a></p>` : ""}
-        <div class="fotos">${fotos.map((f) => `<a href="${esc(f.url || f)}" target="_blank" rel="noopener"><img loading="lazy" src="${esc(f.url || f)}" alt=""></a>`).join("")}</div>` : ""}
+        <div class="fotos">${fotos.map((f) => `<a href="${esc(f.url || f)}" target="_blank" rel="noopener" title="${esc(f.legenda || FOTO_TIPO[f.tipo] || "")}"><img loading="lazy" src="${esc(f.url || f)}" alt=""></a>`).join("")}</div>
+        ${fotos.length ? `<p class="muted" style="font-size:12px">${[...new Set(fotos.map((f) => FOTO_TIPO[f.tipo] || f.tipo).filter(Boolean))].join(" · ")}</p>` : ""}` : ""}
       ${(v.contagem || []).length ? `<h3 style="margin-top:14px">Contagem</h3>${tabelaContagem(v)}` : ""}
       ${v.obs ? `<p class="muted">${esc(v.obs)}</p>` : ""}`);
   }
@@ -440,7 +442,7 @@
     const med = mediaPedido(v.codcli);
     return `<table class="mini"><thead><tr><th>Produto</th><th class="n">Qtd</th><th class="n">Pedido médio</th><th></th></tr></thead><tbody>${(v.contagem || []).map((i) => {
       const m = med.get(Number(i.codprod)); const q = +i.qtd || 0;
-      const b = q <= 0 ? `<span class="badge bad">ruptura</span>` : m && q < m * 0.3 ? `<span class="badge warn">baixo</span>` : "";
+      const b = i.ruptura || q <= 0 ? `<span class="badge bad">ruptura</span>` : m && q < m * 0.3 ? `<span class="badge warn">baixo</span>` : "";
       return `<tr><td>${esc(i.descricao || i.codprod)}</td><td class="n">${fmtInt.format(q)}</td><td class="n">${m ? fmtInt.format(m) : "—"}</td><td>${b}</td></tr>`;
     }).join("")}</tbody></table>`;
   }
@@ -573,7 +575,7 @@
       const med = S.mix ? mediaPedido(v.codcli) : new Map();
       for (const i of v.contagem) {
         const q = +i.qtd || 0, m = med.get(Number(i.codprod));
-        if (q <= 0 || (m && q < m * 0.3)) out.push({ codcli: v.codcli, data: v.data, item: i, media: m, ruptura: q <= 0, chave: v.chave });
+        if (i.ruptura || q <= 0 || (m && q < m * 0.3)) out.push({ codcli: v.codcli, data: v.data, item: i, media: m, ruptura: i.ruptura || q <= 0, chave: v.chave });
       }
     }
     return out;
@@ -659,17 +661,19 @@
         ${c.telefone ? `<a class="chip" href="tel:${esc(String(c.telefone).replace(/\D/g, ""))}">📞 Ligar</a>` : ""}
         ${maps ? `<a class="chip" href="${maps}" target="_blank" rel="noopener">🧭 Rota</a>` : ""}
         <a class="chip" href="#pg/index.html?cli=${codcli}">🧾 Mix do cliente</a>
-        ${pv ? `<span class="chip" id="fPv">📸 Promotor ${fmtDate(pv.data).slice(0, 5)}</span>` : ""}
+        ${pv && ((pv.fotos || []).length || (pv.contagem || []).length) ? `<span class="chip" id="fPv">📸 Visita do promotor</span>` : ""}
       </div>
       ${!g || g.origem === "aprendido" ? `<div class="aviso-gps">${g ? "Localização aprendida no app." : "<b>Loja sem localização.</b> Sem ela o app não registra a visita presencial."}<br><button class="btn sm" id="salvarGeo">📍 Estou na loja — salvar localização</button> <span class="muted" id="geoMsg" style="font-size:12px"></span></div>` : ""}
       <table class="mini"><tbody>
         <tr><th>Última compra</th><td>${fmtDate(c.ultima_compra)}${c.dias_sem_comprar != null ? ` (${c.dias_sem_comprar} dias)` : ""}</td></tr>
         <tr><th>Visitas presenciais</th><td>${pres.map((p) => `${fmtDate(p.data).slice(0, 5)} ${hm(p.inicio)} (${dur(p.duracao_seg)})`).join("<br>") || "—"}</td></tr>
         <tr><th>Pedidos no mês</th><td>${peds.map((p) => `${fmtDate(p.data).slice(0, 5)} · ${brl(p.valor)}${p.posicao ? " · " + esc(p.posicao) : ""}`).join("<br>") || "—"}</td></tr>
+        <tr><th>Última visita do promotor</th><td>${pv ? `${fmtDate(pv.data).slice(0, 5)} · ${rotPromStatus(pv.status)}${pv.checkin ? ` · ${hm(pv.checkin)}${pv.checkout ? "–" + hm(pv.checkout) : ""}` : ""}${pv.justificativa ? ` · ${esc(pv.justificativa)}` : ""}${pv.promotor ? `<br><span class="muted">${esc(pv.promotor)}</span>` : ""}${(pv.fotos || []).length ? ` · <a href="#" id="fPv2">📷 ${(pv.fotos || []).length} foto(s)</a>` : ""}` : "—"}</td></tr>
         <tr><th>Entregas</th><td>${ents.map((e) => `${(ENT[e.status] || ENT.pendente)[2]}${e.ocorrencia ? " — " + esc(e.ocorrencia) : ""}${e.comprovante ? ` · <a href="${esc(e.comprovante)}" target="_blank" rel="noopener">📄 canhoto</a>` : e.canhoto_em ? ` · 📄 canhoto ${hm(e.canhoto_em)}` : ""}`).join("<br>") || "—"}</td></tr>
       </tbody></table>
       ${pv && (pv.contagem || []).length ? `<h3 style="margin-top:14px">Contagem do promotor (${fmtDate(pv.data)})</h3>${tabelaContagem(pv)}` : ""}`);
     el("fPv")?.addEventListener("click", () => abrirPromotor(pv.chave, "fotos"));
+    el("fPv2")?.addEventListener("click", (e) => { e.preventDefault(); abrirPromotor(pv.chave, "fotos"); });
     el("salvarGeo")?.addEventListener("click", async () => {
       const m = el("geoMsg");
       const usar = async (pos) => {

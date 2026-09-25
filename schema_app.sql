@@ -37,6 +37,7 @@ insert into public.app_config (id) values (1) on conflict (id) do nothing;
 
 -- Conectores externos (só admin/agente): ficam na configuração da integração
 alter table public.integracao_config add column if not exists fusion        jsonb not null default '{}'::jsonb;
+alter table public.integracao_config add column if not exists promovisita   jsonb not null default '{}'::jsonb;
 alter table public.integracao_config add column if not exists promotor_rede jsonb not null default '{}'::jsonb;
 alter table public.app_config enable row level security;
 drop policy if exists app_config_select on public.app_config;
